@@ -1,0 +1,92 @@
+# Ingestão das fontes públicas do INMET para a camada bronze (Unity Catalog).
+resources:
+  jobs:
+    inmet_ingestao:
+      name: inmet_ingestao
+      max_concurrent_runs: 1
+
+      # Diário às 06:00 (America/Sao_Paulo). Em dev o schedule fica pausado (mode: development).
+      schedule:
+        quartz_cron_expression: "0 0 6 * * ?"
+        timezone_id: America/Sao_Paulo
+
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+        - name: ano_inicio
+          default: "2000"
+        - name: ano_fim
+          default: ""          # vazio = ano corrente
+        - name: forcar
+          default: "false"     # true = recarrega anos do BDMEP mesmo sem alteração
+        - name: dias_observacoes
+          default: "2"
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "4"
+            dependencies:
+              - ../dist/*.whl
+
+      tasks:
+        - task_key: estacoes
+          environment_key: default
+          python_wheel_task:
+            package_name: p_clima
+            entry_point: inmet
+            parameters: [estacoes, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}"]
+
+        - task_key: avisos
+          environment_key: default
+          python_wheel_task:
+            package_name: p_clima
+            entry_point: inmet
+            parameters: [avisos, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}"]
+
+        - task_key: bdmep
+          environment_key: default
+          timeout_seconds: 14400
+          python_wheel_task:
+            package_name: p_clima
+            entry_point: inmet
+            parameters:
+              - bdmep
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+              - --ano-inicio
+              - "{{job.parameters.ano_inicio}}"
+              - --ano-fim
+              - "{{job.parameters.ano_fim}}"
+              - --forcar
+              - "{{job.parameters.forcar}}"
+
+        # Depende do cadastro de estações; sem token no secret scope 'inmet' a tarefa só registra e sai.
+        - task_key: observacoes
+          depends_on:
+            - task_key: estacoes
+          environment_key: default
+          python_wheel_task:
+            package_name: p_clima
+            entry_point: inmet
+            parameters:
+              - observacoes
+              - --catalog
+              - "{{job.parameters.catalog}}"
+              - --schema
+              - "{{job.parameters.schema}}"
+              - --dias
+              - "{{job.parameters.dias_observacoes}}"
+
+        # Silver: refresh das materialized views após as cargas bronze.
+        - task_key: silver
+          depends_on:
+            - task_key: estacoes
+            - task_key: avisos
+            - task_key: bdmep
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.inmet_silver.id}

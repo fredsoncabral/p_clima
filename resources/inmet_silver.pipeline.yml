@@ -1,0 +1,13 @@
+# Camada silver do INMET: materialized views em SQL sobre as tabelas bronze.
+resources:
+  pipelines:
+    inmet_silver:
+      name: inmet_silver
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      channel: CURRENT
+      root_path: ../src/pipelines/inmet_silver
+      libraries:
+        - glob:
+            include: ../src/pipelines/inmet_silver/transformations/**

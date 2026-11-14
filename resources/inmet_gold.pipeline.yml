@@ -1,0 +1,13 @@
+# Camada gold do INMET: agregados diários/mensais, normais e anomalias (materialized views em SQL).
+resources:
+  pipelines:
+    inmet_gold:
+      name: inmet_gold
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      channel: CURRENT
+      root_path: ../src/pipelines/inmet_gold
+      libraries:
+        - glob:
+            include: ../src/pipelines/inmet_gold/transformations/**

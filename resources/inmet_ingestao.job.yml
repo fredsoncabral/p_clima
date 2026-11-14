@@ -90,3 +90,10 @@ resources:
             - task_key: bdmep
           pipeline_task:
             pipeline_id: ${resources.pipelines.inmet_silver.id}
+
+        # Gold: agregados e anomalias, após a silver.
+        - task_key: gold
+          depends_on:
+            - task_key: silver
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.inmet_gold.id}

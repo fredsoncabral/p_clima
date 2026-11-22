@@ -3,6 +3,8 @@ name = "p_clima"
 version = "0.0.1"
 authors = [{ name = "fredsoncabral" }]
 description = "Plataforma de inteligência climática com dados do INMET no Databricks (bronze/silver/gold, ENSO, SPI, dashboard AI/BI)"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "requests>=2.31",

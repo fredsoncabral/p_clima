@@ -1,6 +1,7 @@
 # Climate Intelligence Brasil — dados do INMET no Databricks
 
 [![CI](https://github.com/fredsoncabral/p_clima/actions/workflows/ci.yml/badge.svg)](https://github.com/fredsoncabral/p_clima/actions/workflows/ci.yml)
+[![Licença: MIT](https://img.shields.io/badge/licen%C3%A7a-MIT-blue.svg)](LICENSE)
 
 Plataforma de **engenharia e análise de dados climáticos** construída sobre o histórico das estações
 automáticas do **INMET** (2000–2026) e o índice **ENSO da NOAA**. O projeto vai da ingestão das APIs
@@ -141,6 +142,11 @@ Em produção (`-t prod`) o job roda diariamente às 06:00 (horário de Brasíli
 - **NOAA Climate Prediction Center** — [Oceanic Niño Index (ONI)](https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt).
 
 Os dados pertencem às respectivas instituições; este repositório contém apenas código e documentação.
+
+## Licença
+
+Código e documentação sob a [licença MIT](LICENSE). A licença não se aplica aos dados do INMET e da NOAA,
+que seguem os termos de uso de cada instituição.
 
 ---
 

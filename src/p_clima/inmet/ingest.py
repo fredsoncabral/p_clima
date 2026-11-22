@@ -10,6 +10,7 @@ Uso (entry point do wheel):
   inmet avisos     --catalog workspace --schema clima
   inmet bdmep      --catalog workspace --schema clima --ano-inicio 2000 --ano-fim 2026 [--forcar]
   inmet observacoes --catalog workspace --schema clima --dias 2
+  inmet enso       --catalog workspace --schema clima        (índice ONI da NOAA)
 """
 
 from __future__ import annotations
@@ -96,7 +97,7 @@ def _token_inmet() -> str | None:
         from databricks.sdk.runtime import dbutils
 
         return dbutils.secrets.get(SECRET_SCOPE, SECRET_KEY_TOKEN)
-    except Exception:  # escopo/chave inexistente ou fora do Databricks
+    except Exception:  # noqa: BLE001 — escopo/chave inexistente ou fora do Databricks
         return None
 
 
@@ -263,7 +264,7 @@ def ingerir_observacoes(ctx: Contexto, client: InmetClient, dias: int) -> None:
     for cod in estacoes:
         try:
             dados = client.observacoes_estacao(cod, inicio, fim, token)
-        except Exception as e:  # uma estação com erro não derruba a carga
+        except Exception as e:  # noqa: BLE001 — uma estação com erro não derruba a carga
             falhas += 1
             print(f"[observacoes] {cod}: erro {e!r}"[:300])
             continue
@@ -280,10 +281,35 @@ def ingerir_observacoes(ctx: Contexto, client: InmetClient, dias: int) -> None:
         df.write.mode("append").saveAsTable(ctx.tabela("bronze_inmet_observacoes"))
 
 
+# ---------------------------------------------------------------- ENSO (NOAA ONI)
+def ingerir_enso(ctx: Contexto, client: InmetClient) -> None:
+    from pyspark.sql import functions as F
+
+    texto = client.oni_texto()
+    arq = ctx.caminho_raw("enso", f"dt={ctx.agora:%Y-%m-%d}", f"oni_{ctx.agora:%H%M%S}.txt")
+    with open(arq, "w", encoding="utf-8") as f:
+        f.write(texto)
+
+    linhas = []
+    for linha in texto.splitlines()[1:]:  # 1ª linha = cabeçalho
+        partes = linha.split()
+        if len(partes) == 4:
+            linhas.append((*partes, arq))
+    if not linhas:
+        raise RuntimeError("Arquivo ONI sem linhas válidas — layout da NOAA mudou?")
+    colunas = ("temporada", "ano", "total", "anomalia", "_arquivo_origem")
+    schema = StructType([StructField(c, StringType()) for c in colunas])
+    df = ctx.spark.createDataFrame(linhas, schema).withColumn("_ingerido_em", F.lit(ctx.agora))
+    # A NOAA revisa valores recentes: snapshot completo a cada execução.
+    df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(ctx.tabela("bronze_noaa_oni"))
+    ctx.habilitar_row_tracking("bronze_noaa_oni")
+    print(f"[enso] {len(linhas)} trimestres ONI ({linhas[0][1]}–{linhas[-1][1]}) -> {arq}")
+
+
 # ---------------------------------------------------------------- CLI
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="inmet")
-    p.add_argument("tarefa", choices=["estacoes", "avisos", "bdmep", "observacoes"])
+    p.add_argument("tarefa", choices=["estacoes", "avisos", "bdmep", "observacoes", "enso"])
     p.add_argument("--catalog", required=True)
     p.add_argument("--schema", required=True)
     p.add_argument("--ano-inicio", type=int, default=2000)
@@ -305,6 +331,8 @@ def main(argv: list[str] | None = None) -> None:
         ingerir_bdmep(ctx, client, a.ano_inicio, ano_fim, a.forcar.lower() == "true")
     elif a.tarefa == "observacoes":
         ingerir_observacoes(ctx, client, a.dias)
+    elif a.tarefa == "enso":
+        ingerir_enso(ctx, client)
 
 
 if __name__ == "__main__":

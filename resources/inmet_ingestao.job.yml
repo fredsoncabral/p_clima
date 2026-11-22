@@ -46,6 +46,13 @@ resources:
             entry_point: inmet
             parameters: [avisos, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}"]
 
+        - task_key: enso
+          environment_key: default
+          python_wheel_task:
+            package_name: p_clima
+            entry_point: inmet
+            parameters: [enso, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}"]
+
         - task_key: bdmep
           environment_key: default
           timeout_seconds: 14400
@@ -87,6 +94,7 @@ resources:
           depends_on:
             - task_key: estacoes
             - task_key: avisos
+            - task_key: enso
             - task_key: bdmep
           pipeline_task:
             pipeline_id: ${resources.pipelines.inmet_silver.id}

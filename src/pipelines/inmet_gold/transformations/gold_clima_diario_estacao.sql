@@ -3,6 +3,10 @@
 --  * Leituras fisicamente implausíveis viram NULL antes de agregar
 --    (temperatura fora de -15..50 °C; radiação fora de 0..5000 kJ/m² por hora).
 --  * Dia "completo" = pelo menos 18 das 24 horas com dado.
+--  * Índice de calor (sensação térmica por calor e umidade): equação de Rothfusz (NOAA/NWS),
+--    calculada hora a hora; o dia guarda o máximo. Faixas NWS: < 27 °C normal, 27–32 cautela,
+--    32–41 cautela extrema, 41–54 perigo, >= 54 perigo extremo. Valores > 60 °C (fora da validade
+--    física, ex.: A401 Salvador jun/2007 com Tmáx 45 °C e 80 % de umidade) viram NULL.
 CREATE OR REFRESH MATERIALIZED VIEW gold_clima_diario_estacao
 CLUSTER BY (cd_estacao, data_local)
 COMMENT 'Clima diário por estação automática do INMET (BDMEP), unidades métricas, dia no fuso local'
@@ -30,6 +34,24 @@ WITH h AS (
     pressao_estacao_hpa
   FROM silver_inmet_bdmep_horario
 ),
+hf AS (  -- temperatura em °F para a fórmula do NWS
+  SELECT *, temp_c * 9 / 5 + 32 AS tf, umidade_pct AS rh FROM h
+),
+hi AS (
+  SELECT *,
+    CASE WHEN tf IS NULL OR rh IS NULL THEN NULL
+         WHEN (0.5 * (tf + 61 + (tf - 68) * 1.2 + rh * 0.094) + tf) / 2 < 80
+           THEN 0.5 * (tf + 61 + (tf - 68) * 1.2 + rh * 0.094)
+         ELSE -42.379 + 2.04901523 * tf + 10.14333127 * rh - 0.22475541 * tf * rh
+              - 0.00683783 * tf * tf - 0.05481717 * rh * rh + 0.00122874 * tf * tf * rh
+              + 0.00085282 * tf * rh * rh - 0.00000199 * tf * tf * rh * rh
+              - CASE WHEN rh < 13 AND tf BETWEEN 80 AND 112
+                     THEN ((13 - rh) / 4) * sqrt((17 - abs(tf - 95)) / 17) ELSE 0 END
+              + CASE WHEN rh > 85 AND tf BETWEEN 80 AND 87
+                     THEN ((rh - 85) / 10) * ((87 - tf) / 5) ELSE 0 END
+    END AS indice_calor_f
+  FROM hf
+),
 d AS (
   SELECT
     cd_estacao,
@@ -49,8 +71,9 @@ d AS (
     round(sum(radiacao_kj_m2) / 1000, 2)                       AS radiacao_global_mj_m2,
     round(avg(vento_ms), 2)                                    AS vento_medio_ms,
     max(rajada_ms)                                             AS rajada_max_ms,
-    round(avg(pressao_estacao_hpa), 1)                         AS pressao_media_hpa
-  FROM h
+    round(avg(pressao_estacao_hpa), 1)                         AS pressao_media_hpa,
+    round(CASE WHEN (max(indice_calor_f) - 32) * 5 / 9 <= 60 THEN (max(indice_calor_f) - 32) * 5 / 9 END, 1)   AS indice_calor_max_c
+  FROM hi
   GROUP BY cd_estacao, data_local
 )
 SELECT

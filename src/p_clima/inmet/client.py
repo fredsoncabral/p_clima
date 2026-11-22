@@ -23,6 +23,8 @@ from urllib3.util.retry import Retry
 API_TEMPO = "https://apitempo.inmet.gov.br"
 API_ALERTAS = "https://apiprevmet3.inmet.gov.br"
 BDMEP_HIST = "https://portal.inmet.gov.br/uploads/dadoshistoricos"
+# Índice Oceânico Niño (ONI) oficial da NOAA/CPC: média móvel trimestral da anomalia de TSM no Niño 3.4.
+NOAA_ONI = "https://www.cpc.ncep.noaa.gov/data/indices/oni.ascii.txt"
 
 USER_AGENT = "p-clima-ingest/0.1"
 
@@ -92,6 +94,13 @@ class InmetClient:
         r.raise_for_status()
         tam = r.headers.get("content-length")
         return ArquivoRemoto(url, int(tam) if tam else None, r.headers.get("last-modified"))
+
+    # ---------- ENSO (NOAA) ----------
+    def oni_texto(self) -> str:
+        """Arquivo texto do ONI: colunas SEAS YR TOTAL ANOM (uma linha por trimestre móvel)."""
+        r = self.http.get(NOAA_ONI, timeout=self.timeout)
+        r.raise_for_status()
+        return r.text
 
     def baixar(self, url: str, destino: str) -> None:
         """Download em streaming direto para o destino (ex.: um caminho em /Volumes)."""

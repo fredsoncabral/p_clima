@@ -9,8 +9,8 @@ SELECT
   mes_ref, ano, mes,
   count(temp_media_c)                                           AS n_estacoes_temp,
   count(precipitacao_mm)                                        AS n_estacoes_chuva,
-  round(avg(temp_media_c), 2)                                   AS temp_media_c,
-  round(avg(anomalia_temp_c), 2)                                AS anomalia_temp_c,
+  round(avg(temp_media_c) FILTER (WHERE NOT qc_temp_suspeito), 2) AS temp_media_c,
+  round(avg(anomalia_temp_c) FILTER (WHERE NOT qc_temp_suspeito), 2) AS anomalia_temp_c,
   round(avg(precipitacao_mm), 1)                                AS precipitacao_media_mm,
   round(percentile(precipitacao_pct_normal, 0.5), 1)            AS precipitacao_pct_normal_mediana
 FROM gold_clima_anomalia_mensal_estacao

@@ -2,6 +2,8 @@
 --  * anomalia_temp_c: diferença em °C para a média normal do mês
 --  * anomalia_temp_padronizada: anomalia / desvio-padrão interanual (z-score)
 --  * precipitacao_pct_normal: chuva do mês como % da normal (100 = igual à normal)
+--  * qc_temp_suspeito: |anomalia| > 5 °C numa média mensal é quase sempre defeito de sensor
+--    (ex.: A402 Barreiras em 2005, média de 5,8 °C em agosto) — excluir em análises
 CREATE OR REFRESH MATERIALIZED VIEW gold_clima_anomalia_mensal_estacao
 CLUSTER BY (cd_estacao, mes_ref)
 COMMENT 'Clima mensal por estação com anomalias de temperatura e chuva (base 2001–2025)'
@@ -20,7 +22,8 @@ SELECT
   CASE WHEN m.mes_valido_chuva AND n.precipitacao_normal_mm > 0
        THEN round(100 * m.precipitacao_mm / n.precipitacao_normal_mm, 1) END AS precipitacao_pct_normal,
   n.n_anos_temp,
-  n.n_anos_chuva
+  n.n_anos_chuva,
+  coalesce(m.mes_valido_temp AND abs(m.temp_media_c - n.temp_media_normal_c) > 5, false) AS qc_temp_suspeito
 FROM gold_clima_mensal_estacao m
 JOIN gold_clima_normal_mensal_estacao n USING (cd_estacao, mes)
 WHERE m.mes_valido_temp OR m.mes_valido_chuva;

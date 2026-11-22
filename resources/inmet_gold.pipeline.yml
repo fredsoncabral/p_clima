@@ -11,3 +11,6 @@ resources:
       libraries:
         - glob:
             include: ../src/pipelines/inmet_gold/transformations/**
+      environment:
+        dependencies:
+          - scipy

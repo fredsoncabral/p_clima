@@ -102,6 +102,8 @@ WHERE cd_estacao IN (SELECT cd_estacao FROM base GROUP BY cd_estacao HAVING coun
         ("Dias chuva atual", "Dias com chuva >= 1 mm em 12 meses (média por estação)", "12 * AVG(CASE WHEN `periodo`='atual' THEN `dias_com_chuva` END)"),
         ("Dias chuva anterior", "Dias com chuva nos 12 meses anteriores", "12 * AVG(CASE WHEN `periodo`='anterior' THEN `dias_com_chuva` END)"),
     ]),
+    ds("ds_kpi_mapa", "Mapa — anomalia dos últimos 12 meses (estações com coordenadas)", "__KPI_SQL__ AND latitude IS NOT NULL",
+       [("Anom atual", "Anomalia térmica, últimos 12 meses (°C)", "AVG(CASE WHEN `periodo`='atual' THEN `anomalia_temp_c` END)")]),
     ds("ds_avisos", "Avisos meteorológicos vigentes", """
 SELECT descricao, severidade,
   from_utc_timestamp(inicio_utc, 'America/Sao_Paulo') AS inicio_brasilia,
@@ -121,6 +123,19 @@ SELECT a.cd_estacao, {ROTULO.format(p='a.')} AS estacao, a.sg_estado, {REGIAO.fo
   a.var_temp_ano_anterior_c
 FROM gold_clima_anual_estacao a
 LEFT JOIN longa l USING (cd_estacao)
+"""),
+    # formato longo (uma coluna de valor + série): eixo com título e cores fixas por série no gráfico de linhas
+    ds("ds_anual_series", "Temperatura anual por série (máx./média/mín./normal)", f"""
+WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)
+SELECT a.cd_estacao, {ROTULO.format(p='a.')} AS estacao, a.sg_estado, {REGIAO.format(c='a.regiao')} AS regiao,
+  make_date(a.ano, 1, 1) AS mes_ref, a.ano,
+  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,
+  s.serie, s.temp_c
+FROM gold_clima_anual_estacao a
+LEFT JOIN longa l USING (cd_estacao)
+LATERAL VIEW stack(4, 'Máxima média', a.temp_max_media_c, 'Média', a.temp_media_c,
+                      'Mínima média', a.temp_min_media_c, 'Normal 2001–2025', a.temp_normal_c) s AS serie, temp_c
+WHERE a.temp_media_c IS NOT NULL
 """),
     ds("ds_mensal_hist", "Série mensal por estação (histórico)", f"""
 WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)
@@ -186,6 +201,16 @@ LEFT JOIN longa l USING (cd_estacao)
         ("Freq frio extremo", "Fração de dias com Tmín < p05 local (esperado ~5%)", "SUM(`dias_frio_extremo`) / SUM(`dias_validos_temp`)"),
         ("Freq desconforto", "Fração de dias com índice de calor >= 32 °C", "SUM(`dias_desconforto_calor`) / SUM(`dias_validos_temp`)"),
     ]),
+    ds("ds_freq_extremos", "Frequência de dias de calor/frio extremo", f"""
+WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)
+SELECT e.cd_estacao, {ROTULO.format(p='e.')} AS estacao, e.sg_estado, {REGIAO.format(c='e.regiao')} AS regiao,
+  e.mes_ref, e.ano, CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,
+  e.dias_validos_temp, s.tipo, s.dias
+FROM gold_clima_eventos_mensal_estacao e
+LEFT JOIN longa l USING (cd_estacao)
+LATERAL VIEW stack(2, 'Calor extremo (Tmáx > p95)', e.dias_calor_extremo,
+                      'Frio extremo (Tmín < p05)', e.dias_frio_extremo) s AS tipo, dias
+""", [("Freq", "Fração dos dias válidos com o evento (esperado ~5%)", "SUM(`dias`) / SUM(`dias_validos_temp`)")]),
     ds("ds_spi", "SPI mensal por estação", f"""
 SELECT cd_estacao, {ROTULO.format(p='')} AS estacao, sg_estado, {REGIAO.format(c='regiao')} AS regiao,
   mes_ref, ano, cast(escala_meses AS STRING) AS escala, spi, categoria
@@ -205,7 +230,7 @@ SELECT cd_estacao, {ROTULO.format(p='')} AS estacao, sg_estado, {REGIAO.format(c
   tendencia_temp_c_decada, CASE WHEN significativa_95_temp THEN 'Sim' ELSE 'Não' END AS significativa,
   tendencia_chuva_pct_decada
 FROM gold_clima_tendencia_estacao
-WHERE tendencia_temp_c_decada IS NOT NULL
+WHERE tendencia_temp_c_decada IS NOT NULL AND latitude IS NOT NULL  -- 3 estações antigas sem coordenadas
 ORDER BY tendencia_temp_c_decada DESC
 """),
     ds("ds_geo", "Comparação geográfica (mensal por estação)", f"""
@@ -356,7 +381,7 @@ p1 = [
                          "encodings": {"value": {"fieldName": "countdistinct(cd_estacao)", "displayName": "Estações", "format": DEC0}},
                          "frame": frame("Estações comparadas", "Estações com dados nos dois períodos de 12 meses")}},
      "position": pos(9, 13, 3, 3)},
-    grafico("p1-mapa", "symbol-map", "ds_kpi",
+    grafico("p1-mapa", "symbol-map", "ds_kpi_mapa",
             [C("latitude"), C("longitude"), M("Anom atual")],
             {"coordinates": {"latitude": {"fieldName": "latitude"}, "longitude": {"fieldName": "longitude"}},
              "color": {"fieldName": "measure(Anom atual)", "displayName": "Anomalia (°C)",
@@ -370,18 +395,13 @@ p1 = [
 ]
 # ------------------------------------------------------------------ página 2 — histórico
 p2 = [
-    texto("p2-titulo", ["# Histórico meteorológico (2000–2026)\n"], 0, 0, 12, 1),
+    texto("p2-titulo", ["# Histórico meteorológico\n"], 0, 0, 12, 1),
     texto("p2-sub", ["A rede cresceu de 5 estações (2000) para mais de 500 (2016+). Para comparar anos sem viés de composição, ",
                      "mantenha o filtro **Série longa = Sim** (estações com 15+ anos de dados). Use Região/UF/Estação na aba Filtros."], 0, 1, 12, 1),
-    grafico("p2-temp-anual", "line", "ds_anual",
-            [C("ano"), A("avg", "temp_media_c"), A("avg", "temp_max_media_c"), A("avg", "temp_min_media_c"), A("avg", "temp_normal_c")],
+    grafico("p2-temp-anual", "line", "ds_anual_series", [C("ano"), C("serie"), A("avg", "temp_c")],
             {"x": q("ano", "categorical", displayName="Ano"),
-             "y": {"scale": {"type": "quantitative"}, "format": DEC1, "fields": [
-                 {"fieldName": "avg(temp_max_media_c)", "displayName": "Máxima média"},
-                 {"fieldName": "avg(temp_media_c)", "displayName": "Média"},
-                 {"fieldName": "avg(temp_min_media_c)", "displayName": "Mínima média"},
-                 {"fieldName": "avg(temp_normal_c)", "displayName": "Normal 2001–2025"}]},
-             "color": {"scale": {"type": "categorical", "mappings": [
+             "y": q("avg(temp_c)", displayName="Temperatura (°C)", format=DEC1),
+             "color": {"fieldName": "serie", "displayName": "Série", "scale": {"type": "categorical", "mappings": [
                  {"value": "Máxima média", "color": VERMELHO}, {"value": "Média", "color": AMARELO},
                  {"value": "Mínima média", "color": CIANO}, {"value": "Normal 2001–2025", "color": CINZA}]}}},
             "Evolução da temperatura anual (°C)", 0, 2, 8, 7,
@@ -438,7 +458,7 @@ p2 = [
 
 # ------------------------------------------------------------------ página 3 — ENSO
 p3 = [
-    texto("p3-titulo", ["# El Niño, La Niña e o clima brasileiro\n"], 0, 0, 12, 1),
+    texto("p3-titulo", ["# El Niño, La Niña e o clima\n"], 0, 0, 12, 1),
     texto("p3-sub", ["Classificação mensal oficial pelo **ONI (NOAA/CPC)**: El Niño/La Niña quando |ONI| >= 0,5 °C por 5 trimestres consecutivos. ",
                      "Os impactos variam por região e aparecem com **defasagem** — use as correlações por defasagem. Séries regionais a partir de 2008 (rede > 400 estações). ",
                      "Correlação não implica causalidade."], 0, 1, 12, 2),
@@ -485,7 +505,7 @@ p3 = [
 
 # ------------------------------------------------------------------ página 4 — extremos e anomalias
 p4 = [
-    texto("p4-titulo", ["# Eventos extremos e anomalias\n"], 0, 0, 12, 1),
+    texto("p4-titulo", ["# Extremos e seca\n"], 0, 0, 12, 1),
     texto("p4-sub", ["Limiares **relativos ao clima local** de cada estação e mês (base 2001–2025): onda de calor = 5+ dias seguidos com Tmáx > p90; ",
                      "calor/frio extremo = Tmáx > p95 / Tmín < p05; chuva extrema = dia > p95 dos dias chuvosos. Valores por estação-ano normalizam o tamanho da rede."], 0, 1, 12, 2),
     kpi("k4-onda", "ds_eventos", "Dias onda calor ano", "Dias em onda de calor", DEC1, " dias/ano", 0, 3, descricao="Por estação-ano no período filtrado"),
@@ -506,14 +526,12 @@ for i, (campo, func, titulo, fmt, suf) in enumerate([
                                    "frame": frame(titulo, "Após controle de qualidade de sensores")}},
                "position": pos(3 * i, 6, 3, 3)})
 p4 += [
-    grafico("p4-freq", "line", "ds_eventos", [C("ano"), M("Freq calor extremo"), M("Freq frio extremo")],
+    grafico("p4-freq", "line", "ds_freq_extremos", [C("ano"), C("tipo"), M("Freq")],
             {"x": q("ano", "categorical", displayName="Ano"),
-             "y": {"scale": {"type": "quantitative"}, "format": PCT1, "fields": [
-                 {"fieldName": "measure(Freq calor extremo)", "displayName": "Dias de calor extremo (> p95)"},
-                 {"fieldName": "measure(Freq frio extremo)", "displayName": "Dias de frio extremo (< p05)"}]},
-             "color": {"scale": {"type": "categorical", "mappings": [
-                 {"value": "Dias de calor extremo (> p95)", "color": VERMELHO},
-                 {"value": "Dias de frio extremo (< p05)", "color": CIANO}]}}},
+             "y": q("measure(Freq)", displayName="% dos dias", format=PCT1),
+             "color": {"fieldName": "tipo", "displayName": "Evento", "scale": {"type": "categorical", "mappings": [
+                 {"value": "Calor extremo (Tmáx > p95)", "color": VERMELHO},
+                 {"value": "Frio extremo (Tmín < p05)", "color": CIANO}]}}},
             "A frequência de dias acima do p95 aumentou? (% dos dias)", 0, 9, 7, 7,
             "Por construção, ~5% na média do período-base; valores acima indicam aquecimento.",
             extra={"annotations": [hlinha(0.05, "esperado (5%)")]}),
@@ -555,7 +573,7 @@ p4 += [
 
 # ------------------------------------------------------------------ página 5 — geográfica
 p5 = [
-    texto("p5-titulo", ["# Análise geográfica e comparação entre estações\n"], 0, 0, 12, 1),
+    texto("p5-titulo", ["# Análise geográfica\n"], 0, 0, 12, 1),
     texto("p5-sub", ["Rankings e comparações respeitam os filtros de **Período, Região, UF e Estação**. Para comparar estações lado a lado, ",
                      "selecione-as no filtro *Estação*. Compare estações com cautela: altitude, localização e continuidade da série importam."], 0, 1, 12, 1),
     grafico("p5-tend-mapa", "symbol-map", "ds_tendencia", [C("latitude"), C("longitude"), A("avg", "tendencia_temp_c_decada")],
@@ -602,6 +620,26 @@ p5 = [
             extra={"mark": {"opacity": 0.8}}, desagregado=True),
 ]
 
+# ------------------------------------------------------------------ ajustes de layout
+def esticar(pagina, nome, nova_altura):
+    """Aumenta a altura de um widget e empurra para baixo tudo o que vem depois dele."""
+    item = next(i for i in pagina if i["widget"]["name"] == nome)
+    fim, delta = item["position"]["y"] + item["position"]["height"], nova_altura - item["position"]["height"]
+    item["position"]["height"] = nova_altura
+    for outro in pagina:
+        if outro is not item and outro["position"]["y"] >= fim:
+            outro["position"]["y"] += delta
+
+
+for _pagina, _nome in ((p1, "p1-sub"), (p2, "p2-sub"), (p5, "p5-sub")):
+    esticar(_pagina, _nome, 2)
+
+_kpi = next(d for d in DATASETS if d["name"] == "ds_kpi")
+_mapa = next(d for d in DATASETS if d["name"] == "ds_kpi_mapa")
+_mapa["queryLines"] = [linha for linha in _kpi["queryLines"] if not linha.lstrip().startswith("--")]
+_mapa["queryLines"][-1] = _mapa["queryLines"][-1].rstrip("\n") + "\n  AND latitude IS NOT NULL\n"
+
+
 # ------------------------------------------------------------------ filtros globais
 def filtro(nome, tipo, titulo, campo, datasets, x, y, w, padrao=None):
     queries = [{"name": f"{nome}_{d}", "query": {"datasetName": d, "fields": [{"name": campo, "expression": f"`{campo}`"}],
@@ -614,16 +652,20 @@ def filtro(nome, tipo, titulo, campo, datasets, x, y, w, padrao=None):
     return {"widget": {"name": nome, "queries": queries, "spec": spec}, "position": pos(x, y, w, 2)}
 
 
-COM_REGIAO = ["ds_kpi", "ds_anual", "ds_mensal_hist", "ds_sazonal", "ds_eventos", "ds_spi", "ds_spi_atual", "ds_tendencia", "ds_geo", "ds_enso_regiao"]
+COM_REGIAO = ["ds_kpi", "ds_kpi_mapa", "ds_anual", "ds_anual_series", "ds_mensal_hist", "ds_sazonal", "ds_eventos",
+              "ds_freq_extremos", "ds_spi", "ds_spi_atual", "ds_tendencia", "ds_geo", "ds_enso_regiao"]
 filtros = [
     filtro("f-periodo", "filter-date-range-picker", "Período", "mes_ref",
-           ["ds_anual", "ds_mensal_hist", "ds_sazonal", "ds_eventos", "ds_spi", "ds_geo", "ds_enso_regiao", "ds_enso"], 0, 0, 4),
+           ["ds_anual", "ds_anual_series", "ds_mensal_hist", "ds_sazonal", "ds_eventos", "ds_freq_extremos", "ds_spi", "ds_geo",
+            "ds_enso_regiao", "ds_enso"], 0, 0, 4),
     filtro("f-regiao", "filter-multi-select", "Região", "regiao", COM_REGIAO, 4, 0, 4),
     filtro("f-uf", "filter-multi-select", "UF", "sg_estado", [d for d in COM_REGIAO if d != "ds_enso_regiao"], 8, 0, 4),
     filtro("f-estacao", "filter-multi-select", "Estação", "estacao",
-           ["ds_kpi", "ds_anual", "ds_mensal_hist", "ds_sazonal", "ds_eventos", "ds_spi", "ds_spi_atual", "ds_tendencia", "ds_geo"], 0, 2, 8),
+           ["ds_kpi", "ds_kpi_mapa", "ds_anual", "ds_anual_series", "ds_mensal_hist", "ds_sazonal", "ds_eventos",
+            "ds_freq_extremos", "ds_spi", "ds_spi_atual", "ds_tendencia", "ds_geo"], 0, 2, 8),
     filtro("f-serie-longa", "filter-single-select", "Série longa (15+ anos)", "serie_longa",
-           ["ds_anual", "ds_mensal_hist", "ds_sazonal", "ds_eventos"], 8, 2, 4, padrao=["Sim"]),
+           ["ds_anual", "ds_anual_series", "ds_mensal_hist", "ds_sazonal", "ds_eventos", "ds_freq_extremos"], 8, 2, 4,
+           padrao=["Sim"]),
 ]
 
 DASH = {

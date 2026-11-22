@@ -127,6 +127,44 @@
       ]
     },
     {
+      "name": "ds_kpi_mapa",
+      "displayName": "Mapa — anomalia dos últimos 12 meses (estações com coordenadas)",
+      "queryLines": [
+        "WITH u AS (SELECT max(mes_ref) AS ultimo FROM gold_clima_anomalia_mensal_estacao),\n",
+        "nrm AS (\n",
+        "  SELECT cd_estacao, avg(temp_media_normal_c) AS temp_normal_anual_c\n",
+        "  FROM gold_clima_normal_mensal_estacao GROUP BY cd_estacao HAVING count(temp_media_normal_c) = 12\n",
+        "),\n",
+        "base AS (\n",
+        "SELECT m.cd_estacao, concat(m.nome_estacao, ' (', m.sg_estado, ')') AS estacao, m.sg_estado, CASE m.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE m.regiao END AS regiao,\n",
+        "  m.latitude, m.longitude, m.mes_ref,\n",
+        "  CASE WHEN m.mes_ref > add_months(u.ultimo, -12) THEN 'atual' ELSE 'anterior' END AS periodo,\n",
+        "  CASE WHEN m.mes_valido_temp AND NOT coalesce(a.qc_temp_suspeito, false) THEN m.temp_media_c END AS temp_media_c,\n",
+        "  CASE WHEN NOT coalesce(a.qc_temp_suspeito, false) THEN a.anomalia_temp_c END AS anomalia_temp_c,\n",
+        "  CASE WHEN NOT coalesce(a.qc_temp_suspeito, false) AND a.anomalia_temp_c IS NOT NULL THEN n.temp_normal_anual_c END AS temp_normal_anual_c,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.precipitacao_mm END AS precipitacao_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN a.precipitacao_normal_mm END AS precipitacao_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva AND a.precipitacao_normal_mm IS NOT NULL THEN m.precipitacao_mm END AS precip_com_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.dias_com_chuva END AS dias_com_chuva,\n",
+        "  m.umidade_media_pct, m.vento_medio_ms * 3.6 AS vento_medio_kmh\n",
+        "FROM gold_clima_mensal_estacao m\n",
+        "CROSS JOIN u\n",
+        "LEFT JOIN nrm n ON n.cd_estacao = m.cd_estacao\n",
+        "LEFT JOIN gold_clima_anomalia_mensal_estacao a ON a.cd_estacao = m.cd_estacao AND a.mes_ref = m.mes_ref\n",
+        "WHERE m.mes_ref > add_months(u.ultimo, -24)\n",
+        ")\n",
+        "SELECT * FROM base\n",
+        "WHERE cd_estacao IN (SELECT cd_estacao FROM base GROUP BY cd_estacao HAVING count(DISTINCT periodo) = 2)\n  AND latitude IS NOT NULL\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Anom atual",
+          "description": "Anomalia térmica, últimos 12 meses (°C)",
+          "expression": "AVG(CASE WHEN `periodo`='atual' THEN `anomalia_temp_c` END)"
+        }
+      ]
+    },
+    {
       "name": "ds_avisos",
       "displayName": "Avisos meteorológicos vigentes",
       "queryLines": [
@@ -152,6 +190,22 @@
         "  a.var_temp_ano_anterior_c\n",
         "FROM gold_clima_anual_estacao a\n",
         "LEFT JOIN longa l USING (cd_estacao)\n"
+      ]
+    },
+    {
+      "name": "ds_anual_series",
+      "displayName": "Temperatura anual por série (máx./média/mín./normal)",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT a.cd_estacao, concat(a.nome_estacao, ' (', a.sg_estado, ')') AS estacao, a.sg_estado, CASE a.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE a.regiao END AS regiao,\n",
+        "  make_date(a.ano, 1, 1) AS mes_ref, a.ano,\n",
+        "  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  s.serie, s.temp_c\n",
+        "FROM gold_clima_anual_estacao a\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n",
+        "LATERAL VIEW stack(4, 'Máxima média', a.temp_max_media_c, 'Média', a.temp_media_c,\n",
+        "                      'Mínima média', a.temp_min_media_c, 'Normal 2001–2025', a.temp_normal_c) s AS serie, temp_c\n",
+        "WHERE a.temp_media_c IS NOT NULL\n"
       ]
     },
     {
@@ -276,6 +330,27 @@
       ]
     },
     {
+      "name": "ds_freq_extremos",
+      "displayName": "Frequência de dias de calor/frio extremo",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT e.cd_estacao, concat(e.nome_estacao, ' (', e.sg_estado, ')') AS estacao, e.sg_estado, CASE e.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE e.regiao END AS regiao,\n",
+        "  e.mes_ref, e.ano, CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  e.dias_validos_temp, s.tipo, s.dias\n",
+        "FROM gold_clima_eventos_mensal_estacao e\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n",
+        "LATERAL VIEW stack(2, 'Calor extremo (Tmáx > p95)', e.dias_calor_extremo,\n",
+        "                      'Frio extremo (Tmín < p05)', e.dias_frio_extremo) s AS tipo, dias\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Freq",
+          "description": "Fração dos dias válidos com o evento (esperado ~5%)",
+          "expression": "SUM(`dias`) / SUM(`dias_validos_temp`)"
+        }
+      ]
+    },
+    {
       "name": "ds_spi",
       "displayName": "SPI mensal por estação",
       "queryLines": [
@@ -305,7 +380,7 @@
         "  tendencia_temp_c_decada, CASE WHEN significativa_95_temp THEN 'Sim' ELSE 'Não' END AS significativa,\n",
         "  tendencia_chuva_pct_decada\n",
         "FROM gold_clima_tendencia_estacao\n",
-        "WHERE tendencia_temp_c_decada IS NOT NULL\n",
+        "WHERE tendencia_temp_c_decada IS NOT NULL AND latitude IS NOT NULL  -- 3 estações antigas sem coordenadas\n",
         "ORDER BY tendencia_temp_c_decada DESC\n"
       ]
     },
@@ -407,7 +482,7 @@
             "x": 0,
             "y": 1,
             "width": 12,
-            "height": 1
+            "height": 2
           }
         },
         {
@@ -481,7 +556,7 @@
           },
           "position": {
             "x": 0,
-            "y": 2,
+            "y": 3,
             "width": 12,
             "height": 6
           }
@@ -554,7 +629,7 @@
           },
           "position": {
             "x": 0,
-            "y": 8,
+            "y": 9,
             "width": 12,
             "height": 2
           }
@@ -617,7 +692,7 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
+            "y": 11,
             "width": 3,
             "height": 3
           }
@@ -682,7 +757,7 @@
           },
           "position": {
             "x": 3,
-            "y": 10,
+            "y": 11,
             "width": 3,
             "height": 3
           }
@@ -747,7 +822,7 @@
           },
           "position": {
             "x": 6,
-            "y": 10,
+            "y": 11,
             "width": 3,
             "height": 3
           }
@@ -809,7 +884,7 @@
           },
           "position": {
             "x": 9,
-            "y": 10,
+            "y": 11,
             "width": 3,
             "height": 3
           }
@@ -872,7 +947,7 @@
           },
           "position": {
             "x": 0,
-            "y": 13,
+            "y": 14,
             "width": 3,
             "height": 3
           }
@@ -935,7 +1010,7 @@
           },
           "position": {
             "x": 3,
-            "y": 13,
+            "y": 14,
             "width": 3,
             "height": 3
           }
@@ -1000,7 +1075,7 @@
           },
           "position": {
             "x": 6,
-            "y": 13,
+            "y": 14,
             "width": 3,
             "height": 3
           }
@@ -1049,7 +1124,7 @@
           },
           "position": {
             "x": 9,
-            "y": 13,
+            "y": 14,
             "width": 3,
             "height": 3
           }
@@ -1061,7 +1136,7 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_kpi",
+                  "datasetName": "ds_kpi_mapa",
                   "fields": [
                     {
                       "name": "latitude",
@@ -1120,7 +1195,7 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
+            "y": 17,
             "width": 7,
             "height": 8
           }
@@ -1204,7 +1279,7 @@
           },
           "position": {
             "x": 7,
-            "y": 16,
+            "y": 17,
             "width": 5,
             "height": 8
           }
@@ -1222,7 +1297,7 @@
             "name": "p2-titulo",
             "multilineTextboxSpec": {
               "lines": [
-                "# Histórico meteorológico (2000–2026)\n"
+                "# Histórico meteorológico\n"
               ]
             }
           },
@@ -1247,7 +1322,7 @@
             "x": 0,
             "y": 1,
             "width": 12,
-            "height": 1
+            "height": 2
           }
         },
         {
@@ -1257,27 +1332,19 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_anual",
+                  "datasetName": "ds_anual_series",
                   "fields": [
                     {
                       "name": "ano",
                       "expression": "`ano`"
                     },
                     {
-                      "name": "avg(temp_media_c)",
-                      "expression": "AVG(`temp_media_c`)"
+                      "name": "serie",
+                      "expression": "`serie`"
                     },
                     {
-                      "name": "avg(temp_max_media_c)",
-                      "expression": "AVG(`temp_max_media_c`)"
-                    },
-                    {
-                      "name": "avg(temp_min_media_c)",
-                      "expression": "AVG(`temp_min_media_c`)"
-                    },
-                    {
-                      "name": "avg(temp_normal_c)",
-                      "expression": "AVG(`temp_normal_c`)"
+                      "name": "avg(temp_c)",
+                      "expression": "AVG(`temp_c`)"
                     }
                   ],
                   "disaggregated": false
@@ -1296,36 +1363,22 @@
                   "displayName": "Ano"
                 },
                 "y": {
+                  "fieldName": "avg(temp_c)",
                   "scale": {
                     "type": "quantitative"
                   },
+                  "displayName": "Temperatura (°C)",
                   "format": {
                     "type": "number-plain",
                     "decimalPlaces": {
                       "type": "exact",
                       "places": 1
                     }
-                  },
-                  "fields": [
-                    {
-                      "fieldName": "avg(temp_max_media_c)",
-                      "displayName": "Máxima média"
-                    },
-                    {
-                      "fieldName": "avg(temp_media_c)",
-                      "displayName": "Média"
-                    },
-                    {
-                      "fieldName": "avg(temp_min_media_c)",
-                      "displayName": "Mínima média"
-                    },
-                    {
-                      "fieldName": "avg(temp_normal_c)",
-                      "displayName": "Normal 2001–2025"
-                    }
-                  ]
+                  }
                 },
                 "color": {
+                  "fieldName": "serie",
+                  "displayName": "Série",
                   "scale": {
                     "type": "categorical",
                     "mappings": [
@@ -1359,7 +1412,7 @@
           },
           "position": {
             "x": 0,
-            "y": 2,
+            "y": 3,
             "width": 8,
             "height": 7
           }
@@ -1437,7 +1490,7 @@
           },
           "position": {
             "x": 8,
-            "y": 2,
+            "y": 3,
             "width": 4,
             "height": 7
           }
@@ -1514,7 +1567,7 @@
           },
           "position": {
             "x": 0,
-            "y": 9,
+            "y": 10,
             "width": 8,
             "height": 7
           }
@@ -1594,7 +1647,7 @@
           },
           "position": {
             "x": 8,
-            "y": 9,
+            "y": 10,
             "width": 4,
             "height": 7
           }
@@ -1610,7 +1663,7 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
+            "y": 17,
             "width": 9,
             "height": 1
           }
@@ -1671,7 +1724,7 @@
           },
           "position": {
             "x": 9,
-            "y": 16,
+            "y": 17,
             "width": 3,
             "height": 1
           }
@@ -1743,7 +1796,7 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 18,
             "width": 6,
             "height": 6
           }
@@ -1818,7 +1871,7 @@
           },
           "position": {
             "x": 6,
-            "y": 17,
+            "y": 18,
             "width": 6,
             "height": 6
           }
@@ -1898,7 +1951,7 @@
           },
           "position": {
             "x": 0,
-            "y": 23,
+            "y": 24,
             "width": 7,
             "height": 9
           }
@@ -1951,7 +2004,7 @@
           },
           "position": {
             "x": 7,
-            "y": 23,
+            "y": 24,
             "width": 5,
             "height": 9
           }
@@ -1969,7 +2022,7 @@
             "name": "p3-titulo",
             "multilineTextboxSpec": {
               "lines": [
-                "# El Niño, La Niña e o clima brasileiro\n"
+                "# El Niño, La Niña e o clima\n"
               ]
             }
           },
@@ -2627,7 +2680,7 @@
             "name": "p4-titulo",
             "multilineTextboxSpec": {
               "lines": [
-                "# Eventos extremos e anomalias\n"
+                "# Extremos e seca\n"
               ]
             }
           },
@@ -3062,19 +3115,19 @@
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_eventos",
+                  "datasetName": "ds_freq_extremos",
                   "fields": [
                     {
                       "name": "ano",
                       "expression": "`ano`"
                     },
                     {
-                      "name": "measure(Freq calor extremo)",
-                      "expression": "MEASURE(`Freq calor extremo`)"
+                      "name": "tipo",
+                      "expression": "`tipo`"
                     },
                     {
-                      "name": "measure(Freq frio extremo)",
-                      "expression": "MEASURE(`Freq frio extremo`)"
+                      "name": "measure(Freq)",
+                      "expression": "MEASURE(`Freq`)"
                     }
                   ],
                   "disaggregated": false
@@ -3093,37 +3146,31 @@
                   "displayName": "Ano"
                 },
                 "y": {
+                  "fieldName": "measure(Freq)",
                   "scale": {
                     "type": "quantitative"
                   },
+                  "displayName": "% dos dias",
                   "format": {
                     "type": "number-percent",
                     "decimalPlaces": {
                       "type": "max",
                       "places": 1
                     }
-                  },
-                  "fields": [
-                    {
-                      "fieldName": "measure(Freq calor extremo)",
-                      "displayName": "Dias de calor extremo (> p95)"
-                    },
-                    {
-                      "fieldName": "measure(Freq frio extremo)",
-                      "displayName": "Dias de frio extremo (< p05)"
-                    }
-                  ]
+                  }
                 },
                 "color": {
+                  "fieldName": "tipo",
+                  "displayName": "Evento",
                   "scale": {
                     "type": "categorical",
                     "mappings": [
                       {
-                        "value": "Dias de calor extremo (> p95)",
+                        "value": "Calor extremo (Tmáx > p95)",
                         "color": "#E5484D"
                       },
                       {
-                        "value": "Dias de frio extremo (< p05)",
+                        "value": "Frio extremo (Tmín < p05)",
                         "color": "#22C3E6"
                       }
                     ]
@@ -3665,7 +3712,7 @@
             "name": "p5-titulo",
             "multilineTextboxSpec": {
               "lines": [
-                "# Análise geográfica e comparação entre estações\n"
+                "# Análise geográfica\n"
               ]
             }
           },
@@ -3690,7 +3737,7 @@
             "x": 0,
             "y": 1,
             "width": 12,
-            "height": 1
+            "height": 2
           }
         },
         {
@@ -3759,7 +3806,7 @@
           },
           "position": {
             "x": 0,
-            "y": 2,
+            "y": 3,
             "width": 7,
             "height": 8
           }
@@ -3823,7 +3870,7 @@
           },
           "position": {
             "x": 7,
-            "y": 2,
+            "y": 3,
             "width": 5,
             "height": 8
           }
@@ -3886,7 +3933,7 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
+            "y": 11,
             "width": 4,
             "height": 7
           }
@@ -3949,7 +3996,7 @@
           },
           "position": {
             "x": 4,
-            "y": 10,
+            "y": 11,
             "width": 4,
             "height": 7
           }
@@ -4014,7 +4061,7 @@
           },
           "position": {
             "x": 8,
-            "y": 10,
+            "y": 11,
             "width": 4,
             "height": 7
           }
@@ -4160,7 +4207,7 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 18,
             "width": 12,
             "height": 8
           }
@@ -4292,7 +4339,7 @@
           },
           "position": {
             "x": 0,
-            "y": 25,
+            "y": 26,
             "width": 7,
             "height": 8
           }
@@ -4366,7 +4413,7 @@
           },
           "position": {
             "x": 7,
-            "y": 25,
+            "y": 26,
             "width": 5,
             "height": 8
           }
@@ -4387,6 +4434,19 @@
                 "name": "f-periodo_ds_anual",
                 "query": {
                   "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_anual_series",
+                "query": {
+                  "datasetName": "ds_anual_series",
                   "fields": [
                     {
                       "name": "mes_ref",
@@ -4426,6 +4486,19 @@
                 "name": "f-periodo_ds_eventos",
                 "query": {
                   "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_freq_extremos",
+                "query": {
+                  "datasetName": "ds_freq_extremos",
                   "fields": [
                     {
                       "name": "mes_ref",
@@ -4501,6 +4574,11 @@
                   {
                     "fieldName": "mes_ref",
                     "displayName": "Período",
+                    "queryName": "f-periodo_ds_anual_series"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
                     "queryName": "f-periodo_ds_mensal_hist"
                   },
                   {
@@ -4512,6 +4590,11 @@
                     "fieldName": "mes_ref",
                     "displayName": "Período",
                     "queryName": "f-periodo_ds_eventos"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_freq_extremos"
                   },
                   {
                     "fieldName": "mes_ref",
@@ -4566,9 +4649,35 @@
                 }
               },
               {
+                "name": "f-regiao_ds_kpi_mapa",
+                "query": {
+                  "datasetName": "ds_kpi_mapa",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "f-regiao_ds_anual",
                 "query": {
                   "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_anual_series",
+                "query": {
+                  "datasetName": "ds_anual_series",
                   "fields": [
                     {
                       "name": "regiao",
@@ -4608,6 +4717,19 @@
                 "name": "f-regiao_ds_eventos",
                 "query": {
                   "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_freq_extremos",
+                "query": {
+                  "datasetName": "ds_freq_extremos",
                   "fields": [
                     {
                       "name": "regiao",
@@ -4696,7 +4818,17 @@
                   {
                     "fieldName": "regiao",
                     "displayName": "Região",
+                    "queryName": "f-regiao_ds_kpi_mapa"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
                     "queryName": "f-regiao_ds_anual"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_anual_series"
                   },
                   {
                     "fieldName": "regiao",
@@ -4712,6 +4844,11 @@
                     "fieldName": "regiao",
                     "displayName": "Região",
                     "queryName": "f-regiao_ds_eventos"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_freq_extremos"
                   },
                   {
                     "fieldName": "regiao",
@@ -4771,9 +4908,35 @@
                 }
               },
               {
+                "name": "f-uf_ds_kpi_mapa",
+                "query": {
+                  "datasetName": "ds_kpi_mapa",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "f-uf_ds_anual",
                 "query": {
                   "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_anual_series",
+                "query": {
+                  "datasetName": "ds_anual_series",
                   "fields": [
                     {
                       "name": "sg_estado",
@@ -4813,6 +4976,19 @@
                 "name": "f-uf_ds_eventos",
                 "query": {
                   "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_freq_extremos",
+                "query": {
+                  "datasetName": "ds_freq_extremos",
                   "fields": [
                     {
                       "name": "sg_estado",
@@ -4888,7 +5064,17 @@
                   {
                     "fieldName": "sg_estado",
                     "displayName": "UF",
+                    "queryName": "f-uf_ds_kpi_mapa"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
                     "queryName": "f-uf_ds_anual"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_anual_series"
                   },
                   {
                     "fieldName": "sg_estado",
@@ -4904,6 +5090,11 @@
                     "fieldName": "sg_estado",
                     "displayName": "UF",
                     "queryName": "f-uf_ds_eventos"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_freq_extremos"
                   },
                   {
                     "fieldName": "sg_estado",
@@ -4958,9 +5149,35 @@
                 }
               },
               {
+                "name": "f-estacao_ds_kpi_mapa",
+                "query": {
+                  "datasetName": "ds_kpi_mapa",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "f-estacao_ds_anual",
                 "query": {
                   "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_anual_series",
+                "query": {
+                  "datasetName": "ds_anual_series",
                   "fields": [
                     {
                       "name": "estacao",
@@ -5000,6 +5217,19 @@
                 "name": "f-estacao_ds_eventos",
                 "query": {
                   "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_freq_extremos",
+                "query": {
+                  "datasetName": "ds_freq_extremos",
                   "fields": [
                     {
                       "name": "estacao",
@@ -5075,7 +5305,17 @@
                   {
                     "fieldName": "estacao",
                     "displayName": "Estação",
+                    "queryName": "f-estacao_ds_kpi_mapa"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
                     "queryName": "f-estacao_ds_anual"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_anual_series"
                   },
                   {
                     "fieldName": "estacao",
@@ -5091,6 +5331,11 @@
                     "fieldName": "estacao",
                     "displayName": "Estação",
                     "queryName": "f-estacao_ds_eventos"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_freq_extremos"
                   },
                   {
                     "fieldName": "estacao",
@@ -5145,6 +5390,19 @@
                 }
               },
               {
+                "name": "f-serie-longa_ds_anual_series",
+                "query": {
+                  "datasetName": "ds_anual_series",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
                 "name": "f-serie-longa_ds_mensal_hist",
                 "query": {
                   "datasetName": "ds_mensal_hist",
@@ -5182,6 +5440,19 @@
                   ],
                   "disaggregated": false
                 }
+              },
+              {
+                "name": "f-serie-longa_ds_freq_extremos",
+                "query": {
+                  "datasetName": "ds_freq_extremos",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
               }
             ],
             "spec": {
@@ -5197,6 +5468,11 @@
                   {
                     "fieldName": "serie_longa",
                     "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_anual_series"
+                  },
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
                     "queryName": "f-serie-longa_ds_mensal_hist"
                   },
                   {
@@ -5208,6 +5484,11 @@
                     "fieldName": "serie_longa",
                     "displayName": "Série longa (15+ anos)",
                     "queryName": "f-serie-longa_ds_eventos"
+                  },
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_freq_extremos"
                   }
                 ]
               },

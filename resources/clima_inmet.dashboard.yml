@@ -1,0 +1,9 @@
+# Dashboard AI/BI "Clima no Brasil" sobre as tabelas gold/silver do INMET.
+resources:
+  dashboards:
+    clima_inmet:
+      display_name: Clima no Brasil - INMET
+      file_path: ../src/dashboards/clima_inmet.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.schema}

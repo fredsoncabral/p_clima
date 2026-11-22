@@ -1,17 +1,18 @@
 """This file configures pytest, initializes Databricks Connect, and provides fixtures for Spark and loading test data."""
 
-import os, sys, pathlib
-from contextlib import contextmanager
-
+import os
+import pathlib
+import sys
 
 try:
+    import csv
+    import json
+    import os
+
+    import pytest
     from databricks.connect import DatabricksSession
     from databricks.sdk import WorkspaceClient
     from pyspark.sql import SparkSession
-    import pytest
-    import json
-    import csv
-    import os
 except ImportError:
     raise ImportError(
         "Test dependencies not found.\n\nRun tests using 'uv run pytest'. See http://docs.astral.sh/uv to learn more about uv."
@@ -27,6 +28,7 @@ def spark() -> SparkSession:
             df = spark.createDataFrame([(1,)], ["x"])
             assert df.count() == 1
     """
+    _enable_fallback_compute()
     return DatabricksSession.builder.getOrCreate()
 
 
@@ -69,26 +71,9 @@ def _enable_fallback_compute():
     os.environ["DATABRICKS_SERVERLESS_COMPUTE_ID"] = "auto"
 
 
-@contextmanager
-def _allow_stderr_output(config: pytest.Config):
-    """Temporarily disable pytest output capture."""
-    capman = config.pluginmanager.get_plugin("capturemanager")
-    if capman:
-        with capman.global_and_fixture_disabled():
-            yield
-    else:
-        yield
-
-
 def pytest_configure(config: pytest.Config):
-    """Configure pytest session."""
-    with _allow_stderr_output(config):
-        _enable_fallback_compute()
+    """Sessão Spark é criada sob demanda (fixture `spark`), não no início do pytest.
 
-        # Initialize Spark session eagerly, so it is available even when
-        # SparkSession.builder.getOrCreate() is used. For DB Connect 15+,
-        # we validate version compatibility with the remote cluster.
-        if hasattr(DatabricksSession.builder, "validateSession"):
-            DatabricksSession.builder.validateSession().getOrCreate()
-        else:
-            DatabricksSession.builder.getOrCreate()
+    Assim os testes unitários puros rodam offline (ex.: no GitHub Actions, sem credenciais);
+    apenas testes que pedem a fixture `spark` exigem um workspace Databricks configurado.
+    """

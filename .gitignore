@@ -8,3 +8,11 @@ scratch/**
 !scratch/README.md
 **/explorations/**
 **/!explorations/README.md
+
+# ambiente local / ferramentas de IA (não fazem parte do projeto)
+.env
+.ai-dev-kit/
+.claude/
+.prompts/
+.pytest_cache/
+.ruff_cache/

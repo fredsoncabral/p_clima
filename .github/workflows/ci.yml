@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  qualidade:
+    name: Lint, testes e dashboard sincronizado
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências
+        run: uv sync --dev
+
+      - name: Lint (ruff)
+        run: uv run ruff check src scripts tests
+
+      - name: Testes unitários (offline, sem Databricks)
+        run: uv run pytest -q tests
+
+      - name: JSON do dashboard gerado a partir do script
+        run: |
+          uv run python scripts/gerar_dashboard.py
+          git diff --exit-code src/dashboards/clima_inmet.lvdash.json

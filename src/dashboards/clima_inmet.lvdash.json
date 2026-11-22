@@ -1,0 +1,5278 @@
+{
+  "datasets": [
+    {
+      "name": "ds_resumo",
+      "displayName": "Climate Intelligence — resumo por região",
+      "queryLines": [
+        "SELECT regiao_nome, ordem, texto_temperatura, texto_chuva, texto_seca, texto_calor,\n",
+        "  anomalia_temp_12m_c, chuva_12m_razao_normal, spi3_mediano, periodo_inicio, periodo_fim\n",
+        "FROM gold_clima_resumo_regiao\n",
+        "ORDER BY ordem\n"
+      ]
+    },
+    {
+      "name": "ds_enso_atual",
+      "displayName": "ENSO — situação atual",
+      "queryLines": [
+        "SELECT concat(fase, coalesce(concat(' ', lower(intensidade)), '')) AS fase_atual, oni, temporada, ano,\n",
+        "  concat(temporada, '/', ano) AS referencia,\n",
+        "  'Os efeitos do ENSO variam por região e com defasagem; não atribuir anomalias automaticamente ao fenômeno.' AS ressalva\n",
+        "FROM gold_enso_mensal\n",
+        "ORDER BY mes_ref DESC\n",
+        "LIMIT 1\n"
+      ]
+    },
+    {
+      "name": "ds_kpi",
+      "displayName": "KPIs — 12 meses vs 12 meses anteriores",
+      "queryLines": [
+        "WITH u AS (SELECT max(mes_ref) AS ultimo FROM gold_clima_anomalia_mensal_estacao),\n",
+        "nrm AS (\n",
+        "  SELECT cd_estacao, avg(temp_media_normal_c) AS temp_normal_anual_c\n",
+        "  FROM gold_clima_normal_mensal_estacao GROUP BY cd_estacao HAVING count(temp_media_normal_c) = 12\n",
+        "),\n",
+        "base AS (\n",
+        "SELECT m.cd_estacao, concat(m.nome_estacao, ' (', m.sg_estado, ')') AS estacao, m.sg_estado, CASE m.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE m.regiao END AS regiao,\n",
+        "  m.latitude, m.longitude, m.mes_ref,\n",
+        "  CASE WHEN m.mes_ref > add_months(u.ultimo, -12) THEN 'atual' ELSE 'anterior' END AS periodo,\n",
+        "  CASE WHEN m.mes_valido_temp AND NOT coalesce(a.qc_temp_suspeito, false) THEN m.temp_media_c END AS temp_media_c,\n",
+        "  CASE WHEN NOT coalesce(a.qc_temp_suspeito, false) THEN a.anomalia_temp_c END AS anomalia_temp_c,\n",
+        "  CASE WHEN NOT coalesce(a.qc_temp_suspeito, false) AND a.anomalia_temp_c IS NOT NULL THEN n.temp_normal_anual_c END AS temp_normal_anual_c,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.precipitacao_mm END AS precipitacao_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN a.precipitacao_normal_mm END AS precipitacao_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva AND a.precipitacao_normal_mm IS NOT NULL THEN m.precipitacao_mm END AS precip_com_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.dias_com_chuva END AS dias_com_chuva,\n",
+        "  m.umidade_media_pct, m.vento_medio_ms * 3.6 AS vento_medio_kmh\n",
+        "FROM gold_clima_mensal_estacao m\n",
+        "CROSS JOIN u\n",
+        "LEFT JOIN nrm n ON n.cd_estacao = m.cd_estacao\n",
+        "LEFT JOIN gold_clima_anomalia_mensal_estacao a ON a.cd_estacao = m.cd_estacao AND a.mes_ref = m.mes_ref\n",
+        "WHERE m.mes_ref > add_months(u.ultimo, -24)\n",
+        ")\n",
+        "-- só estações com dados nos dois períodos: evita viés de composição na comparação\n",
+        "SELECT * FROM base\n",
+        "WHERE cd_estacao IN (SELECT cd_estacao FROM base GROUP BY cd_estacao HAVING count(DISTINCT periodo) = 2)\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Temp atual",
+          "description": "Temperatura média, últimos 12 meses (°C) = normal anual + anomalia média (sem viés sazonal)",
+          "expression": "AVG(CASE WHEN `periodo`='atual' THEN `temp_normal_anual_c` END) + AVG(CASE WHEN `periodo`='atual' THEN `anomalia_temp_c` END)"
+        },
+        {
+          "displayName": "Temp anterior",
+          "description": "Temperatura média, 12 meses anteriores (°C)",
+          "expression": "AVG(CASE WHEN `periodo`='anterior' THEN `temp_normal_anual_c` END) + AVG(CASE WHEN `periodo`='anterior' THEN `anomalia_temp_c` END)"
+        },
+        {
+          "displayName": "Anom atual",
+          "description": "Anomalia térmica, últimos 12 meses (°C)",
+          "expression": "AVG(CASE WHEN `periodo`='atual' THEN `anomalia_temp_c` END)"
+        },
+        {
+          "displayName": "Anom anterior",
+          "description": "Anomalia térmica, 12 meses anteriores (°C)",
+          "expression": "AVG(CASE WHEN `periodo`='anterior' THEN `anomalia_temp_c` END)"
+        },
+        {
+          "displayName": "Chuva atual",
+          "description": "Chuva acumulada em 12 meses (média por estação, mm)",
+          "expression": "12 * AVG(CASE WHEN `periodo`='atual' THEN `precipitacao_mm` END)"
+        },
+        {
+          "displayName": "Chuva anterior",
+          "description": "Chuva acumulada nos 12 meses anteriores (mm)",
+          "expression": "12 * AVG(CASE WHEN `periodo`='anterior' THEN `precipitacao_mm` END)"
+        },
+        {
+          "displayName": "Chuva pct atual",
+          "description": "Chuva / normal, últimos 12 meses",
+          "expression": "SUM(CASE WHEN `periodo`='atual' THEN `precip_com_normal_mm` END) / SUM(CASE WHEN `periodo`='atual' AND `precip_com_normal_mm` IS NOT NULL THEN `precipitacao_normal_mm` END)"
+        },
+        {
+          "displayName": "Chuva pct anterior",
+          "description": "Chuva / normal, 12 meses anteriores",
+          "expression": "SUM(CASE WHEN `periodo`='anterior' THEN `precip_com_normal_mm` END) / SUM(CASE WHEN `periodo`='anterior' AND `precip_com_normal_mm` IS NOT NULL THEN `precipitacao_normal_mm` END)"
+        },
+        {
+          "displayName": "Umid atual",
+          "description": "Umidade relativa média, últimos 12 meses (%)",
+          "expression": "AVG(CASE WHEN `periodo`='atual' THEN `umidade_media_pct` END)"
+        },
+        {
+          "displayName": "Umid anterior",
+          "description": "Umidade relativa média, 12 meses anteriores (%)",
+          "expression": "AVG(CASE WHEN `periodo`='anterior' THEN `umidade_media_pct` END)"
+        },
+        {
+          "displayName": "Vento atual",
+          "description": "Vento médio, últimos 12 meses (km/h)",
+          "expression": "AVG(CASE WHEN `periodo`='atual' THEN `vento_medio_kmh` END)"
+        },
+        {
+          "displayName": "Vento anterior",
+          "description": "Vento médio, 12 meses anteriores (km/h)",
+          "expression": "AVG(CASE WHEN `periodo`='anterior' THEN `vento_medio_kmh` END)"
+        },
+        {
+          "displayName": "Dias chuva atual",
+          "description": "Dias com chuva >= 1 mm em 12 meses (média por estação)",
+          "expression": "12 * AVG(CASE WHEN `periodo`='atual' THEN `dias_com_chuva` END)"
+        },
+        {
+          "displayName": "Dias chuva anterior",
+          "description": "Dias com chuva nos 12 meses anteriores",
+          "expression": "12 * AVG(CASE WHEN `periodo`='anterior' THEN `dias_com_chuva` END)"
+        }
+      ]
+    },
+    {
+      "name": "ds_avisos",
+      "displayName": "Avisos meteorológicos vigentes",
+      "queryLines": [
+        "SELECT descricao, severidade,\n",
+        "  from_utc_timestamp(inicio_utc, 'America/Sao_Paulo') AS inicio_brasilia,\n",
+        "  from_utc_timestamp(fim_utc, 'America/Sao_Paulo') AS fim_brasilia,\n",
+        "  array_join(estados, ', ') AS estados, size(geocodes_ibge) AS n_municipios\n",
+        "FROM silver_inmet_avisos\n",
+        "WHERE fim_utc >= current_timestamp() AND NOT coalesce(encerrado, false)\n",
+        "ORDER BY id_severidade DESC, inicio_utc\n"
+      ]
+    },
+    {
+      "name": "ds_anual",
+      "displayName": "Resumo anual por estação",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT a.cd_estacao, concat(a.nome_estacao, ' (', a.sg_estado, ')') AS estacao, a.sg_estado, CASE a.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE a.regiao END AS regiao,\n",
+        "  make_date(a.ano, 1, 1) AS mes_ref, a.ano,\n",
+        "  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  a.temp_media_c, a.temp_max_media_c, a.temp_min_media_c, a.temp_normal_c, a.anomalia_temp_c,\n",
+        "  a.precipitacao_mm, a.precipitacao_normal_mm, a.precipitacao_pct_normal / 100 AS precipitacao_razao_normal,\n",
+        "  a.var_temp_ano_anterior_c\n",
+        "FROM gold_clima_anual_estacao a\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n"
+      ]
+    },
+    {
+      "name": "ds_mensal_hist",
+      "displayName": "Série mensal por estação (histórico)",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT a.cd_estacao, concat(a.nome_estacao, ' (', a.sg_estado, ')') AS estacao, a.sg_estado, CASE a.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE a.regiao END AS regiao,\n",
+        "  a.mes_ref, a.ano, a.mes,\n",
+        "  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  a.temp_media_c, a.anomalia_temp_c\n",
+        "FROM gold_clima_anomalia_mensal_estacao a\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n",
+        "WHERE NOT a.qc_temp_suspeito\n"
+      ]
+    },
+    {
+      "name": "ds_sazonal",
+      "displayName": "Sazonalidade — comparação entre anos",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT a.cd_estacao, concat(a.nome_estacao, ' (', a.sg_estado, ')') AS estacao, a.sg_estado, CASE a.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE a.regiao END AS regiao,\n",
+        "  a.mes_ref, cast(a.ano AS STRING) AS ano_txt, a.mes,\n",
+        "  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  a.temp_media_c, a.precipitacao_mm\n",
+        "FROM gold_clima_anomalia_mensal_estacao a\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n",
+        "WHERE NOT a.qc_temp_suspeito\n"
+      ]
+    },
+    {
+      "name": "ds_enso",
+      "displayName": "ONI mensal e fase do ENSO",
+      "queryLines": [
+        "SELECT mes_ref, ano, mes, oni, fase, coalesce(intensidade, '-') AS intensidade\n",
+        "FROM gold_enso_mensal\n",
+        "WHERE ano >= 2000\n",
+        "ORDER BY mes_ref\n"
+      ]
+    },
+    {
+      "name": "ds_enso_regiao",
+      "displayName": "Anomalias regionais x fase do ENSO",
+      "queryLines": [
+        "SELECT regiao_nome AS regiao, mes_ref, ano, mes, oni, fase,\n",
+        "  anomalia_temp_c, anomalia_precipitacao_mm, razao_chuva_normal\n",
+        "FROM gold_clima_enso_regiao_mensal\n",
+        "WHERE ano >= 2008\n"
+      ]
+    },
+    {
+      "name": "ds_enso_corr",
+      "displayName": "Correlação ONI x clima regional",
+      "queryLines": [
+        "SELECT regiao_nome AS regiao, defasagem_meses, cast(defasagem_meses AS STRING) AS defasagem,\n",
+        "  corr_oni_temperatura, corr_oni_chuva, n_meses\n",
+        "FROM gold_clima_enso_correlacao\n"
+      ]
+    },
+    {
+      "name": "ds_enso_episodios",
+      "displayName": "Episódios ENSO desde 2000",
+      "queryLines": [
+        "SELECT fase, inicio, fim, duracao_meses, pico_oni, intensidade_pico,\n",
+        "  CASE WHEN em_curso THEN 'em curso' ELSE '' END AS situacao\n",
+        "FROM gold_enso_episodios\n",
+        "WHERE fim >= '2000-01-01'\n",
+        "ORDER BY inicio DESC\n"
+      ]
+    },
+    {
+      "name": "ds_eventos",
+      "displayName": "Eventos extremos por estação e mês",
+      "queryLines": [
+        "WITH longa AS (SELECT cd_estacao, n_anos_temp >= 15 AS longa FROM gold_clima_tendencia_estacao)\n",
+        "SELECT e.cd_estacao, concat(e.nome_estacao, ' (', e.sg_estado, ')') AS estacao, e.sg_estado, CASE e.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE e.regiao END AS regiao,\n",
+        "  e.mes_ref, e.ano, concat(cast(floor(e.ano / 10) * 10 AS STRING), 's') AS decada,\n",
+        "  CASE WHEN l.longa THEN 'Sim' ELSE 'Não' END AS serie_longa,\n",
+        "  e.dias_validos_temp, e.dias_validos_chuva, e.dias_onda_calor, e.n_ondas_calor, e.dias_calor_extremo,\n",
+        "  e.dias_frio_extremo, e.dias_chuva_extrema, e.dias_umidade_baixa, e.dias_vento_extremo, e.dias_desconforto_calor,\n",
+        "  e.max_dias_secos_consecutivos, e.chuva_max_24h_mm, e.rajada_max_ms * 3.6 AS rajada_max_kmh,\n",
+        "  e.temp_max_absoluta_c, e.temp_min_absoluta_c\n",
+        "FROM gold_clima_eventos_mensal_estacao e\n",
+        "LEFT JOIN longa l USING (cd_estacao)\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Dias onda calor ano",
+          "description": "Dias em onda de calor por estação-ano",
+          "expression": "365 * SUM(`dias_onda_calor`) / SUM(`dias_validos_temp`)"
+        },
+        {
+          "displayName": "Ondas calor ano",
+          "description": "Ondas de calor (>= 5 dias > p90 local) por estação-ano",
+          "expression": "365 * SUM(`n_ondas_calor`) / SUM(`dias_validos_temp`)"
+        },
+        {
+          "displayName": "Dias chuva extrema ano",
+          "description": "Dias com chuva > p95 local por estação-ano",
+          "expression": "365 * SUM(`dias_chuva_extrema`) / SUM(`dias_validos_chuva`)"
+        },
+        {
+          "displayName": "Dias umidade baixa ano",
+          "description": "Dias com umidade mínima < 30% por estação-ano",
+          "expression": "365 * SUM(`dias_umidade_baixa`) / SUM(`dias_validos_temp`)"
+        },
+        {
+          "displayName": "Freq calor extremo",
+          "description": "Fração de dias com Tmáx > p95 local (esperado ~5%)",
+          "expression": "SUM(`dias_calor_extremo`) / SUM(`dias_validos_temp`)"
+        },
+        {
+          "displayName": "Freq frio extremo",
+          "description": "Fração de dias com Tmín < p05 local (esperado ~5%)",
+          "expression": "SUM(`dias_frio_extremo`) / SUM(`dias_validos_temp`)"
+        },
+        {
+          "displayName": "Freq desconforto",
+          "description": "Fração de dias com índice de calor >= 32 °C",
+          "expression": "SUM(`dias_desconforto_calor`) / SUM(`dias_validos_temp`)"
+        }
+      ]
+    },
+    {
+      "name": "ds_spi",
+      "displayName": "SPI mensal por estação",
+      "queryLines": [
+        "SELECT cd_estacao, concat(nome_estacao, ' (', sg_estado, ')') AS estacao, sg_estado, CASE regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE regiao END AS regiao,\n",
+        "  mes_ref, ano, cast(escala_meses AS STRING) AS escala, spi, categoria\n",
+        "FROM gold_clima_spi_mensal_estacao\n",
+        "WHERE ano >= 2008\n"
+      ]
+    },
+    {
+      "name": "ds_spi_atual",
+      "displayName": "SPI-3 do último mês disponível",
+      "queryLines": [
+        "SELECT cd_estacao, concat(nome_estacao, ' (', sg_estado, ')') AS estacao, sg_estado, CASE regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE regiao END AS regiao,\n",
+        "  latitude, longitude, mes_ref, spi, categoria, precip_acumulada_mm\n",
+        "FROM gold_clima_spi_mensal_estacao\n",
+        "WHERE escala_meses = 3 AND mes_ref = (SELECT max(mes_ref) FROM gold_clima_spi_mensal_estacao)\n",
+        "ORDER BY spi\n"
+      ]
+    },
+    {
+      "name": "ds_tendencia",
+      "displayName": "Tendência linear por estação",
+      "queryLines": [
+        "SELECT cd_estacao, concat(nome_estacao, ' (', sg_estado, ')') AS estacao, sg_estado, CASE regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE regiao END AS regiao,\n",
+        "  latitude, longitude, n_anos_temp, concat(ano_inicio_temp, '–', ano_fim_temp) AS periodo,\n",
+        "  tendencia_temp_c_decada, CASE WHEN significativa_95_temp THEN 'Sim' ELSE 'Não' END AS significativa,\n",
+        "  tendencia_chuva_pct_decada\n",
+        "FROM gold_clima_tendencia_estacao\n",
+        "WHERE tendencia_temp_c_decada IS NOT NULL\n",
+        "ORDER BY tendencia_temp_c_decada DESC\n"
+      ]
+    },
+    {
+      "name": "ds_geo",
+      "displayName": "Comparação geográfica (mensal por estação)",
+      "queryLines": [
+        "SELECT m.cd_estacao, concat(m.nome_estacao, ' (', m.sg_estado, ')') AS estacao, m.sg_estado, CASE m.regiao WHEN 'N' THEN 'Norte' WHEN 'NE' THEN 'Nordeste' WHEN 'CO' THEN 'Centro-Oeste' WHEN 'SE' THEN 'Sudeste' WHEN 'S' THEN 'Sul' ELSE m.regiao END AS regiao,\n",
+        "  m.latitude, m.longitude, e.altitude_m, m.mes_ref, m.ano,\n",
+        "  CASE WHEN m.mes_valido_temp AND NOT coalesce(a.qc_temp_suspeito, false) THEN m.temp_media_c END AS temp_media_c,\n",
+        "  CASE WHEN NOT coalesce(a.qc_temp_suspeito, false) THEN a.anomalia_temp_c END AS anomalia_temp_c,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.precipitacao_mm END AS precipitacao_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN a.precipitacao_normal_mm END AS precipitacao_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva AND a.precipitacao_normal_mm IS NOT NULL THEN m.precipitacao_mm END AS precip_com_normal_mm,\n",
+        "  CASE WHEN m.mes_valido_chuva THEN m.dias_com_chuva END AS dias_com_chuva,\n",
+        "  m.umidade_media_pct\n",
+        "FROM gold_clima_mensal_estacao m\n",
+        "LEFT JOIN gold_clima_anomalia_mensal_estacao a ON a.cd_estacao = m.cd_estacao AND a.mes_ref = m.mes_ref\n",
+        "LEFT JOIN silver_inmet_estacoes e ON e.cd_estacao = m.cd_estacao\n"
+      ],
+      "columns": [
+        {
+          "displayName": "Temp media",
+          "description": "Temperatura média (°C)",
+          "expression": "AVG(`temp_media_c`)"
+        },
+        {
+          "displayName": "Anomalia",
+          "description": "Anomalia térmica média (°C)",
+          "expression": "AVG(`anomalia_temp_c`)"
+        },
+        {
+          "displayName": "Chuva anual",
+          "description": "Chuva média anual (mm/ano) = 12 x média mensal",
+          "expression": "12 * AVG(`precipitacao_mm`)"
+        },
+        {
+          "displayName": "Chuva pct normal",
+          "description": "Chuva / normal",
+          "expression": "SUM(`precip_com_normal_mm`) / SUM(CASE WHEN `precip_com_normal_mm` IS NOT NULL THEN `precipitacao_normal_mm` END)"
+        },
+        {
+          "displayName": "Dias chuva ano",
+          "description": "Dias com chuva por ano",
+          "expression": "12 * AVG(`dias_com_chuva`)"
+        },
+        {
+          "displayName": "Umidade",
+          "description": "Umidade relativa média (%)",
+          "expression": "AVG(`umidade_media_pct`)"
+        }
+      ]
+    },
+    {
+      "name": "ds_estacoes",
+      "displayName": "Rede de estações",
+      "queryLines": [
+        "SELECT cd_estacao, concat(nome_estacao, ' (', sg_estado, ')') AS estacao, sg_estado, tipo_estacao, situacao,\n",
+        "  latitude, longitude, altitude_m, dt_inicio_operacao\n",
+        "FROM silver_inmet_estacoes\n",
+        "WHERE latitude IS NOT NULL\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "p1-visao-geral",
+      "displayName": "01 · Visão geral",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p1-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Climate Intelligence — Brasil\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p1-sub",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Situação climática dos **últimos 12 meses disponíveis no BDMEP/INMET**, comparada à normal 2001–2025 de cada estação ",
+                "e aos 12 meses anteriores (valor de comparação abaixo de cada indicador). Anomalia > 0 = mais quente que o normal."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p1-resumo",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_resumo",
+                  "fields": [
+                    {
+                      "name": "regiao_nome",
+                      "expression": "`regiao_nome`"
+                    },
+                    {
+                      "name": "texto_temperatura",
+                      "expression": "`texto_temperatura`"
+                    },
+                    {
+                      "name": "texto_chuva",
+                      "expression": "`texto_chuva`"
+                    },
+                    {
+                      "name": "texto_seca",
+                      "expression": "`texto_seca`"
+                    },
+                    {
+                      "name": "texto_calor",
+                      "expression": "`texto_calor`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "regiao_nome",
+                    "displayName": "Região"
+                  },
+                  {
+                    "fieldName": "texto_temperatura",
+                    "displayName": "Temperatura"
+                  },
+                  {
+                    "fieldName": "texto_chuva",
+                    "displayName": "Precipitação"
+                  },
+                  {
+                    "fieldName": "texto_seca",
+                    "displayName": "Seca"
+                  },
+                  {
+                    "fieldName": "texto_calor",
+                    "displayName": "Calor"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Análise climática automática por região",
+                "showDescription": true,
+                "description": "Texto gerado por regras a partir dos indicadores gold (temperatura, chuva, SPI-3 e ondas de calor)."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p1-enso",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_atual",
+                  "fields": [
+                    {
+                      "name": "fase_atual",
+                      "expression": "`fase_atual`"
+                    },
+                    {
+                      "name": "referencia",
+                      "expression": "`referencia`"
+                    },
+                    {
+                      "name": "oni",
+                      "expression": "`oni`"
+                    },
+                    {
+                      "name": "ressalva",
+                      "expression": "`ressalva`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "fase_atual",
+                    "displayName": "Fase atual do ENSO"
+                  },
+                  {
+                    "fieldName": "referencia",
+                    "displayName": "Referência (trimestre)"
+                  },
+                  {
+                    "fieldName": "oni",
+                    "displayName": "ONI (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "ressalva",
+                    "displayName": "Interpretação"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Fenômeno ENSO (NOAA/CPC)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k-temp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Temp atual)",
+                      "expression": "MEASURE(`Temp atual`)"
+                    },
+                    {
+                      "name": "measure(Temp anterior)",
+                      "expression": "MEASURE(`Temp anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Temp atual)",
+                  "displayName": "Temperatura média",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} °C"
+                },
+                "target": {
+                  "fieldName": "measure(Temp anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Temperatura média"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-anom",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Anom atual)",
+                      "expression": "MEASURE(`Anom atual`)"
+                    },
+                    {
+                      "name": "measure(Anom anterior)",
+                      "expression": "MEASURE(`Anom anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Anom atual)",
+                  "displayName": "Anomalia térmica",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} °C"
+                },
+                "target": {
+                  "fieldName": "measure(Anom anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalia térmica",
+                "showDescription": true,
+                "description": "Desvio em relação à normal 2001–2025"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 10,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Chuva atual)",
+                      "expression": "MEASURE(`Chuva atual`)"
+                    },
+                    {
+                      "name": "measure(Chuva anterior)",
+                      "expression": "MEASURE(`Chuva anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Chuva atual)",
+                  "displayName": "Precipitação acumulada",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} mm"
+                },
+                "target": {
+                  "fieldName": "measure(Chuva anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Precipitação acumulada",
+                "showDescription": true,
+                "description": "Média por estação em 12 meses"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 10,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-chuva-pct",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Chuva pct atual)",
+                      "expression": "MEASURE(`Chuva pct atual`)"
+                    },
+                    {
+                      "name": "measure(Chuva pct anterior)",
+                      "expression": "MEASURE(`Chuva pct anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Chuva pct atual)",
+                  "displayName": "Chuva vs. normal",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                },
+                "target": {
+                  "fieldName": "measure(Chuva pct anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Chuva vs. normal"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 10,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-umid",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Umid atual)",
+                      "expression": "MEASURE(`Umid atual`)"
+                    },
+                    {
+                      "name": "measure(Umid anterior)",
+                      "expression": "MEASURE(`Umid anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Umid atual)",
+                  "displayName": "Umidade relativa",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} %"
+                },
+                "target": {
+                  "fieldName": "measure(Umid anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Umidade relativa"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-vento",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Vento atual)",
+                      "expression": "MEASURE(`Vento atual`)"
+                    },
+                    {
+                      "name": "measure(Vento anterior)",
+                      "expression": "MEASURE(`Vento anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Vento atual)",
+                  "displayName": "Vento médio",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} km/h"
+                },
+                "target": {
+                  "fieldName": "measure(Vento anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Vento médio"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 13,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-dias-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "measure(Dias chuva atual)",
+                      "expression": "MEASURE(`Dias chuva atual`)"
+                    },
+                    {
+                      "name": "measure(Dias chuva anterior)",
+                      "expression": "MEASURE(`Dias chuva anterior`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Dias chuva atual)",
+                  "displayName": "Dias com chuva",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} dias"
+                },
+                "target": {
+                  "fieldName": "measure(Dias chuva anterior)",
+                  "displayName": "12 meses anteriores",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dias com chuva",
+                "showDescription": true,
+                "description": "Dias com >= 1 mm em 12 meses (média por estação)"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 13,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k-estacoes",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "countdistinct(cd_estacao)",
+                      "expression": "COUNT(DISTINCT `cd_estacao`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "countdistinct(cd_estacao)",
+                  "displayName": "Estações",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estações comparadas",
+                "showDescription": true,
+                "description": "Estações com dados nos dois períodos de 12 meses"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 13,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p1-mapa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "measure(Anom atual)",
+                      "expression": "MEASURE(`Anom atual`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "measure(Anom atual)",
+                  "displayName": "Anomalia (°C)",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#22C3E6",
+                        "end": "#E5484D"
+                      }
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalia térmica dos últimos 12 meses por estação (°C)",
+                "showDescription": true,
+                "description": "Ciano = mais frio que a normal; vermelho = mais quente."
+              },
+              "mark": {
+                "opacity": 0.85
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 7,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p1-avisos",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_avisos",
+                  "fields": [
+                    {
+                      "name": "descricao",
+                      "expression": "`descricao`"
+                    },
+                    {
+                      "name": "severidade",
+                      "expression": "`severidade`"
+                    },
+                    {
+                      "name": "inicio_brasilia",
+                      "expression": "`inicio_brasilia`"
+                    },
+                    {
+                      "name": "fim_brasilia",
+                      "expression": "`fim_brasilia`"
+                    },
+                    {
+                      "name": "n_municipios",
+                      "expression": "`n_municipios`"
+                    },
+                    {
+                      "name": "estados",
+                      "expression": "`estados`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "descricao",
+                    "displayName": "Aviso"
+                  },
+                  {
+                    "fieldName": "severidade",
+                    "displayName": "Severidade"
+                  },
+                  {
+                    "fieldName": "inicio_brasilia",
+                    "displayName": "Início (Brasília)"
+                  },
+                  {
+                    "fieldName": "fim_brasilia",
+                    "displayName": "Fim (Brasília)"
+                  },
+                  {
+                    "fieldName": "n_municipios",
+                    "displayName": "Municípios"
+                  },
+                  {
+                    "fieldName": "estados",
+                    "displayName": "Estados"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Avisos meteorológicos vigentes (INMET)",
+                "showDescription": true,
+                "description": "Atualizado a cada execução do job de ingestão."
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 16,
+            "width": 5,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "p2-historico",
+      "displayName": "02 · Histórico",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p2-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Histórico meteorológico (2000–2026)\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-sub",
+            "multilineTextboxSpec": {
+              "lines": [
+                "A rede cresceu de 5 estações (2000) para mais de 500 (2016+). Para comparar anos sem viés de composição, ",
+                "mantenha o filtro **Série longa = Sim** (estações com 15+ anos de dados). Use Região/UF/Estação na aba Filtros."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-temp-anual",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "avg(temp_media_c)",
+                      "expression": "AVG(`temp_media_c`)"
+                    },
+                    {
+                      "name": "avg(temp_max_media_c)",
+                      "expression": "AVG(`temp_max_media_c`)"
+                    },
+                    {
+                      "name": "avg(temp_min_media_c)",
+                      "expression": "AVG(`temp_min_media_c`)"
+                    },
+                    {
+                      "name": "avg(temp_normal_c)",
+                      "expression": "AVG(`temp_normal_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "avg(temp_max_media_c)",
+                      "displayName": "Máxima média"
+                    },
+                    {
+                      "fieldName": "avg(temp_media_c)",
+                      "displayName": "Média"
+                    },
+                    {
+                      "fieldName": "avg(temp_min_media_c)",
+                      "displayName": "Mínima média"
+                    },
+                    {
+                      "fieldName": "avg(temp_normal_c)",
+                      "displayName": "Normal 2001–2025"
+                    }
+                  ]
+                },
+                "color": {
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Máxima média",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "Média",
+                        "color": "#F5C518"
+                      },
+                      {
+                        "value": "Mínima média",
+                        "color": "#22C3E6"
+                      },
+                      {
+                        "value": "Normal 2001–2025",
+                        "color": "#9AA4B2"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Evolução da temperatura anual (°C)",
+                "showDescription": true,
+                "description": "Média dos anos com >= 10 meses válidos; normal = referência climatológica das mesmas estações."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 8,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-anom-anual",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "avg(anomalia_temp_c)",
+                      "expression": "AVG(`anomalia_temp_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                },
+                "y": {
+                  "fieldName": "avg(anomalia_temp_c)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Anomalia (°C)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalia anual (°C)"
+              },
+              "annotations": [
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "0",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "normal"
+                    },
+                    "color": {
+                      "value": "#9AA4B2"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-chuva-anual",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "avg(precipitacao_mm)",
+                      "expression": "AVG(`precipitacao_mm`)"
+                    },
+                    {
+                      "name": "avg(precipitacao_normal_mm)",
+                      "expression": "AVG(`precipitacao_normal_mm`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "combo",
+              "encodings": {
+                "x": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "primary": {
+                    "fields": [
+                      {
+                        "fieldName": "avg(precipitacao_mm)",
+                        "displayName": "Chuva anual (mm)"
+                      }
+                    ]
+                  },
+                  "secondary": {
+                    "fields": [
+                      {
+                        "fieldName": "avg(precipitacao_normal_mm)",
+                        "displayName": "Normal (mm)"
+                      }
+                    ]
+                  }
+                },
+                "label": {
+                  "show": false
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Precipitação anual vs. normal (mm, média por estação)",
+                "showDescription": true,
+                "description": "Somente anos com os 12 meses válidos (ausência de dado não é ausência de chuva)."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 8,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-ranking-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "avg(precipitacao_mm)",
+                      "expression": "AVG(`precipitacao_mm`)"
+                    },
+                    {
+                      "name": "avg(precipitacao_razao_normal)",
+                      "expression": "AVG(`precipitacao_razao_normal`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "AVG(`precipitacao_razao_normal`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "ano",
+                    "displayName": "Ano"
+                  },
+                  {
+                    "fieldName": "avg(precipitacao_mm)",
+                    "displayName": "Chuva (mm)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "avg(precipitacao_razao_normal)",
+                    "displayName": "% da normal",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anos mais chuvosos e mais secos",
+                "showDescription": true,
+                "description": "Ordenado por % da normal (mais chuvoso no topo)."
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 9,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-saz-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Sazonalidade — compare anos (filtro *Anos* ao lado)\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 9,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-filtro-anos",
+            "queries": [
+              {
+                "name": "f_anos",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "ano_txt",
+                      "expression": "`ano_txt`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "ano_txt",
+                    "displayName": "Anos",
+                    "queryName": "f_anos"
+                  }
+                ]
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "2024"
+                      },
+                      {
+                        "value": "2025"
+                      },
+                      {
+                        "value": "2026"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anos"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 16,
+            "width": 3,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-saz-temp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "mes",
+                      "expression": "`mes`"
+                    },
+                    {
+                      "name": "ano_txt",
+                      "expression": "`ano_txt`"
+                    },
+                    {
+                      "name": "avg(temp_media_c)",
+                      "expression": "AVG(`temp_media_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Mês"
+                },
+                "y": {
+                  "fieldName": "avg(temp_media_c)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Temperatura média (°C)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "ano_txt",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Temperatura média mensal por ano (°C)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-saz-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "mes",
+                      "expression": "`mes`"
+                    },
+                    {
+                      "name": "ano_txt",
+                      "expression": "`ano_txt`"
+                    },
+                    {
+                      "name": "avg(precipitacao_mm)",
+                      "expression": "AVG(`precipitacao_mm`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Mês"
+                },
+                "y": {
+                  "fieldName": "avg(precipitacao_mm)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Chuva (mm)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "ano_txt",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Chuva mensal por ano (mm, média por estação)"
+              },
+              "mark": {
+                "layout": "group"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 17,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-heatmap",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "mes",
+                      "expression": "`mes`"
+                    },
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "avg(anomalia_temp_c)",
+                      "expression": "AVG(`anomalia_temp_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Mês",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "y": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "color": {
+                  "fieldName": "avg(anomalia_temp_c)",
+                  "displayName": "Anomalia (°C)",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#22C3E6",
+                        "end": "#E5484D"
+                      }
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Anomalia térmica — ano × mês (°C)",
+                "showDescription": true,
+                "description": "Cada célula = média das estações selecionadas nos filtros globais."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 23,
+            "width": 7,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "p2-box",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "mes",
+                      "expression": "`mes`"
+                    },
+                    {
+                      "name": "temp_media_c",
+                      "expression": "`temp_media_c`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "box",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes",
+                  "displayName": "Mês"
+                },
+                "y": {
+                  "fieldName": "temp_media_c",
+                  "displayName": "Temperatura média mensal (°C)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Distribuição da temperatura média mensal (estações × anos)",
+                "showDescription": true,
+                "description": "Mediana, quartis e extremos de cada mês."
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 23,
+            "width": 5,
+            "height": 9
+          }
+        }
+      ]
+    },
+    {
+      "name": "p3-enso",
+      "displayName": "03 · El Niño / La Niña",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p3-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# El Niño, La Niña e o clima brasileiro\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-sub",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Classificação mensal oficial pelo **ONI (NOAA/CPC)**: El Niño/La Niña quando |ONI| >= 0,5 °C por 5 trimestres consecutivos. ",
+                "Os impactos variam por região e aparecem com **defasagem** — use as correlações por defasagem. Séries regionais a partir de 2008 (rede > 400 estações). ",
+                "Correlação não implica causalidade."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-oni",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    },
+                    {
+                      "name": "fase",
+                      "expression": "`fase`"
+                    },
+                    {
+                      "name": "avg(oni)",
+                      "expression": "AVG(`oni`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes_ref",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Mês"
+                },
+                "y": {
+                  "fieldName": "avg(oni)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ONI (°C)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "fase",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "El Niño",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "La Niña",
+                        "color": "#22C3E6"
+                      },
+                      {
+                        "value": "Neutro",
+                        "color": "#9AA4B2"
+                      }
+                    ]
+                  },
+                  "displayName": "Fase"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Índice Oceânico Niño (ONI) e fase do ENSO desde 2000"
+              },
+              "annotations": [
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "0.5",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "+0,5 (El Niño)"
+                    },
+                    "color": {
+                      "value": "#E5484D"
+                    }
+                  }
+                },
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "-0.5",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "-0,5 (La Niña)"
+                    },
+                    "color": {
+                      "value": "#22C3E6"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-temp-fase",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_regiao",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "fase",
+                      "expression": "`fase`"
+                    },
+                    {
+                      "name": "avg(anomalia_temp_c)",
+                      "expression": "AVG(`anomalia_temp_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região"
+                },
+                "y": {
+                  "fieldName": "avg(anomalia_temp_c)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Anomalia (°C)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "fase",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "El Niño",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "La Niña",
+                        "color": "#22C3E6"
+                      },
+                      {
+                        "value": "Neutro",
+                        "color": "#9AA4B2"
+                      }
+                    ]
+                  },
+                  "displayName": "Fase"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "A. Anomalia térmica média por fase e região (°C)"
+              },
+              "mark": {
+                "layout": "group"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-chuva-fase",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_regiao",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "fase",
+                      "expression": "`fase`"
+                    },
+                    {
+                      "name": "avg(anomalia_precipitacao_mm)",
+                      "expression": "AVG(`anomalia_precipitacao_mm`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região"
+                },
+                "y": {
+                  "fieldName": "avg(anomalia_precipitacao_mm)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Anomalia de chuva (mm/mês)",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "fase",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "El Niño",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "La Niña",
+                        "color": "#22C3E6"
+                      },
+                      {
+                        "value": "Neutro",
+                        "color": "#9AA4B2"
+                      }
+                    ]
+                  },
+                  "displayName": "Fase"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "B. Anomalia de chuva média por fase e região (mm/mês)"
+              },
+              "mark": {
+                "layout": "group"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 9,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-corr-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_corr",
+                  "fields": [
+                    {
+                      "name": "defasagem",
+                      "expression": "`defasagem`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "avg(corr_oni_chuva)",
+                      "expression": "AVG(`corr_oni_chuva`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "defasagem",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Defasagem (meses)"
+                },
+                "y": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "color": {
+                  "fieldName": "avg(corr_oni_chuva)",
+                  "displayName": "Correlação",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#B7791F",
+                        "end": "#3A8DDE"
+                      }
+                    }
+                  }
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "D. Correlação ONI × anomalia de chuva, por defasagem",
+                "showDescription": true,
+                "description": "Negativo (marrom) = El Niño associado a menos chuva; positivo (azul) = mais chuva."
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-corr-temp",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_corr",
+                  "fields": [
+                    {
+                      "name": "defasagem",
+                      "expression": "`defasagem`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "avg(corr_oni_temperatura)",
+                      "expression": "AVG(`corr_oni_temperatura`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "defasagem",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Defasagem (meses)"
+                },
+                "y": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "color": {
+                  "fieldName": "avg(corr_oni_temperatura)",
+                  "displayName": "Correlação",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#22C3E6",
+                        "end": "#E5484D"
+                      }
+                    }
+                  }
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "D. Correlação ONI × anomalia térmica, por defasagem"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 16,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-scatter",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_regiao",
+                  "fields": [
+                    {
+                      "name": "oni",
+                      "expression": "`oni`"
+                    },
+                    {
+                      "name": "anomalia_temp_c",
+                      "expression": "`anomalia_temp_c`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "scatter",
+              "encodings": {
+                "x": {
+                  "fieldName": "oni",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "ONI (°C)"
+                },
+                "y": {
+                  "fieldName": "anomalia_temp_c",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Anomalia térmica (°C)"
+                },
+                "color": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "ONI × anomalia térmica mensal (cada ponto = região-mês)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 22,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p3-episodios",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_enso_episodios",
+                  "fields": [
+                    {
+                      "name": "fase",
+                      "expression": "`fase`"
+                    },
+                    {
+                      "name": "inicio",
+                      "expression": "`inicio`"
+                    },
+                    {
+                      "name": "fim",
+                      "expression": "`fim`"
+                    },
+                    {
+                      "name": "duracao_meses",
+                      "expression": "`duracao_meses`"
+                    },
+                    {
+                      "name": "pico_oni",
+                      "expression": "`pico_oni`"
+                    },
+                    {
+                      "name": "intensidade_pico",
+                      "expression": "`intensidade_pico`"
+                    },
+                    {
+                      "name": "situacao",
+                      "expression": "`situacao`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "fase",
+                    "displayName": "Fase"
+                  },
+                  {
+                    "fieldName": "inicio",
+                    "displayName": "Início"
+                  },
+                  {
+                    "fieldName": "fim",
+                    "displayName": "Fim"
+                  },
+                  {
+                    "fieldName": "duracao_meses",
+                    "displayName": "Meses"
+                  },
+                  {
+                    "fieldName": "pico_oni",
+                    "displayName": "Pico ONI",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "intensidade_pico",
+                    "displayName": "Intensidade"
+                  },
+                  {
+                    "fieldName": "situacao",
+                    "displayName": ""
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "C. Episódios de El Niño e La Niña desde 2000"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 22,
+            "width": 6,
+            "height": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "p4-extremos",
+      "displayName": "04 · Extremos e seca",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p4-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Eventos extremos e anomalias\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-sub",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Limiares **relativos ao clima local** de cada estação e mês (base 2001–2025): onda de calor = 5+ dias seguidos com Tmáx > p90; ",
+                "calor/frio extremo = Tmáx > p95 / Tmín < p05; chuva extrema = dia > p95 dos dias chuvosos. Valores por estação-ano normalizam o tamanho da rede."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-onda",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "measure(Dias onda calor ano)",
+                      "expression": "MEASURE(`Dias onda calor ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Dias onda calor ano)",
+                  "displayName": "Dias em onda de calor",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} dias/ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dias em onda de calor",
+                "showDescription": true,
+                "description": "Por estação-ano no período filtrado"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-n-ondas",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "measure(Ondas calor ano)",
+                      "expression": "MEASURE(`Ondas calor ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Ondas calor ano)",
+                  "displayName": "Ondas de calor",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} por ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ondas de calor",
+                "showDescription": true,
+                "description": "Por estação-ano"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-chuva-ext",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "measure(Dias chuva extrema ano)",
+                      "expression": "MEASURE(`Dias chuva extrema ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Dias chuva extrema ano)",
+                  "displayName": "Dias de chuva extrema",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} dias/ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dias de chuva extrema",
+                "showDescription": true,
+                "description": "Por estação-ano"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-umid",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "measure(Dias umidade baixa ano)",
+                      "expression": "MEASURE(`Dias umidade baixa ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Dias umidade baixa ano)",
+                  "displayName": "Dias com umidade < 30%",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} dias/ano"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Dias com umidade < 30%",
+                "showDescription": true,
+                "description": "Por estação-ano"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 3,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-temp_max_absoluta_c",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "max(temp_max_absoluta_c)",
+                      "expression": "MAX(`temp_max_absoluta_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(temp_max_absoluta_c)",
+                  "displayName": "Temperatura máxima absoluta",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} °C"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Temperatura máxima absoluta",
+                "showDescription": true,
+                "description": "Após controle de qualidade de sensores"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-temp_min_absoluta_c",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "min(temp_min_absoluta_c)",
+                      "expression": "MIN(`temp_min_absoluta_c`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "min(temp_min_absoluta_c)",
+                  "displayName": "Temperatura mínima absoluta",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} °C"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Temperatura mínima absoluta",
+                "showDescription": true,
+                "description": "Após controle de qualidade de sensores"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-chuva_max_24h_mm",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "max(chuva_max_24h_mm)",
+                      "expression": "MAX(`chuva_max_24h_mm`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(chuva_max_24h_mm)",
+                  "displayName": "Maior chuva em 24 h",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} mm"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Maior chuva em 24 h",
+                "showDescription": true,
+                "description": "Após controle de qualidade de sensores"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "k4-rajada_max_kmh",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "max(rajada_max_kmh)",
+                      "expression": "MAX(`rajada_max_kmh`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max(rajada_max_kmh)",
+                  "displayName": "Rajada máxima de vento",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 0
+                    }
+                  },
+                  "formatTemplate": "{{ @formatted }} km/h"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rajada máxima de vento",
+                "showDescription": true,
+                "description": "Após controle de qualidade de sensores"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-freq",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "measure(Freq calor extremo)",
+                      "expression": "MEASURE(`Freq calor extremo`)"
+                    },
+                    {
+                      "name": "measure(Freq frio extremo)",
+                      "expression": "MEASURE(`Freq frio extremo`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "measure(Freq calor extremo)",
+                      "displayName": "Dias de calor extremo (> p95)"
+                    },
+                    {
+                      "fieldName": "measure(Freq frio extremo)",
+                      "displayName": "Dias de frio extremo (< p05)"
+                    }
+                  ]
+                },
+                "color": {
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Dias de calor extremo (> p95)",
+                        "color": "#E5484D"
+                      },
+                      {
+                        "value": "Dias de frio extremo (< p05)",
+                        "color": "#22C3E6"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "A frequência de dias acima do p95 aumentou? (% dos dias)",
+                "showDescription": true,
+                "description": "Por construção, ~5% na média do período-base; valores acima indicam aquecimento."
+              },
+              "annotations": [
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "0.05",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "esperado (5%)"
+                    },
+                    "color": {
+                      "value": "#9AA4B2"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 7,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-decada",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "decada",
+                      "expression": "`decada`"
+                    },
+                    {
+                      "name": "measure(Dias onda calor ano)",
+                      "expression": "MEASURE(`Dias onda calor ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "decada",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Década"
+                },
+                "y": {
+                  "fieldName": "measure(Dias onda calor ano)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Dias em onda de calor por estação-ano",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ondas de calor por década (dias/estação-ano)"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 9,
+            "width": 5,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-heat-uf",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "ano",
+                      "expression": "`ano`"
+                    },
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    },
+                    {
+                      "name": "measure(Dias onda calor ano)",
+                      "expression": "MEASURE(`Dias onda calor ano`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "heatmap",
+              "encodings": {
+                "x": {
+                  "fieldName": "ano",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Ano",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "y": {
+                  "fieldName": "sg_estado",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "UF",
+                  "axis": {
+                    "hideTitle": true
+                  }
+                },
+                "color": {
+                  "fieldName": "measure(Dias onda calor ano)",
+                  "displayName": "Dias/estação-ano",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#1B2436",
+                        "end": "#E5484D"
+                      }
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Calendário de ondas de calor — dias por estação-ano, UF × ano"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 16,
+            "width": 12,
+            "height": 9
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-spi-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Seca e excesso de chuva — SPI (índice padronizado de precipitação)\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 25,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-spi-mapa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_spi_atual",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "avg(spi)",
+                      "expression": "AVG(`spi`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "avg(spi)",
+                  "displayName": "SPI-3",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#B7791F",
+                        "end": "#3A8DDE"
+                      }
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "SPI-3 do último mês por estação",
+                "showDescription": true,
+                "description": "Marrom = seca (SPI <= -1); azul = excesso (SPI >= 1)."
+              },
+              "mark": {
+                "opacity": 0.85
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 26,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-filtro-escala",
+            "queries": [
+              {
+                "name": "f_escala",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "escala",
+                      "expression": "`escala`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "escala",
+                    "displayName": "Escala do SPI (meses)",
+                    "queryName": "f_escala"
+                  }
+                ]
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "12"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Escala do SPI (meses)"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 26,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-spi-serie",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "avg(spi)",
+                      "expression": "AVG(`spi`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "mes_ref",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Mês"
+                },
+                "y": {
+                  "fieldName": "avg(spi)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "SPI médio",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "regiao",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Região"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "SPI médio por região (escala selecionada)"
+              },
+              "annotations": [
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "-1",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "seca moderada"
+                    },
+                    "color": {
+                      "value": "#B7791F"
+                    }
+                  }
+                },
+                {
+                  "type": "horizontal-line",
+                  "encodings": {
+                    "y": {
+                      "dataValue": "1",
+                      "dataType": "DOUBLE"
+                    },
+                    "label": {
+                      "value": "úmido"
+                    },
+                    "color": {
+                      "value": "#3A8DDE"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 27,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p4-spi-tabela",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_spi_atual",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "spi",
+                      "expression": "`spi`"
+                    },
+                    {
+                      "name": "categoria",
+                      "expression": "`categoria`"
+                    },
+                    {
+                      "name": "precip_acumulada_mm",
+                      "expression": "`precip_acumulada_mm`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região"
+                  },
+                  {
+                    "fieldName": "spi",
+                    "displayName": "SPI-3",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    },
+                    "style": {
+                      "type": "basic",
+                      "rules": [
+                        {
+                          "condition": {
+                            "operand": {
+                              "type": "data-value",
+                              "value": "-1.5"
+                            },
+                            "operator": "<="
+                          },
+                          "backgroundColor": {
+                            "hex": "#B7791F"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "fieldName": "categoria",
+                    "displayName": "Classe"
+                  },
+                  {
+                    "fieldName": "precip_acumulada_mm",
+                    "displayName": "Chuva 3 meses (mm)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estações por SPI-3 no último mês (mais secas primeiro)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 34,
+            "width": 12,
+            "height": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "p5-geografica",
+      "displayName": "05 · Geográfica",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p5-titulo",
+            "multilineTextboxSpec": {
+              "lines": [
+                "# Análise geográfica e comparação entre estações\n"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-sub",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Rankings e comparações respeitam os filtros de **Período, Região, UF e Estação**. Para comparar estações lado a lado, ",
+                "selecione-as no filtro *Estação*. Compare estações com cautela: altitude, localização e continuidade da série importam."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 12,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-tend-mapa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_tendencia",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "avg(tendencia_temp_c_decada)",
+                      "expression": "AVG(`tendencia_temp_c_decada`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "avg(tendencia_temp_c_decada)",
+                  "displayName": "°C/década",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "custom-sequential",
+                      "colors": {
+                        "start": "#22C3E6",
+                        "end": "#E5484D"
+                      }
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Tendência linear de temperatura (°C por década)",
+                "showDescription": true,
+                "description": "Estações com 15+ anos de dados; vermelho = aquecimento."
+              },
+              "mark": {
+                "opacity": 0.85
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 7,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-tend-uf",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_tendencia",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    },
+                    {
+                      "name": "avg(tendencia_temp_c_decada)",
+                      "expression": "AVG(`tendencia_temp_c_decada`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "avg(tendencia_temp_c_decada)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "°C por década",
+                  "format": {
+                    "type": "number-plain",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
+                },
+                "y": {
+                  "fieldName": "sg_estado",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "UF",
+                  "sort": {
+                    "by": "value"
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Tendência média por UF (°C/década)"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 2,
+            "width": 5,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-rank-quente",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    },
+                    {
+                      "name": "measure(Temp media)",
+                      "expression": "MEASURE(`Temp media`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "MEASURE(`Temp media`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação"
+                  },
+                  {
+                    "fieldName": "measure(Temp media)",
+                    "displayName": "Temp. média (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ranking — estações mais quentes"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-rank-chuva",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    },
+                    {
+                      "name": "measure(Chuva anual)",
+                      "expression": "MEASURE(`Chuva anual`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "MEASURE(`Chuva anual`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação"
+                  },
+                  {
+                    "fieldName": "measure(Chuva anual)",
+                    "displayName": "Chuva (mm/ano)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ranking — estações mais chuvosas"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 10,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-rank-deficit",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    },
+                    {
+                      "name": "measure(Chuva pct normal)",
+                      "expression": "MEASURE(`Chuva pct normal`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "ASC",
+                      "expression": "MEASURE(`Chuva pct normal`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação"
+                  },
+                  {
+                    "fieldName": "measure(Chuva pct normal)",
+                    "displayName": "% da normal",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Ranking — maior déficit de chuva",
+                "showDescription": true,
+                "description": "Período filtrado vs. normal 2001–2025."
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 10,
+            "width": 4,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-uf",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    },
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    },
+                    {
+                      "name": "measure(Temp media)",
+                      "expression": "MEASURE(`Temp media`)"
+                    },
+                    {
+                      "name": "measure(Anomalia)",
+                      "expression": "MEASURE(`Anomalia`)"
+                    },
+                    {
+                      "name": "measure(Chuva anual)",
+                      "expression": "MEASURE(`Chuva anual`)"
+                    },
+                    {
+                      "name": "measure(Chuva pct normal)",
+                      "expression": "MEASURE(`Chuva pct normal`)"
+                    },
+                    {
+                      "name": "measure(Umidade)",
+                      "expression": "MEASURE(`Umidade`)"
+                    },
+                    {
+                      "name": "countdistinct(cd_estacao)",
+                      "expression": "COUNT(DISTINCT `cd_estacao`)"
+                    }
+                  ],
+                  "disaggregated": false,
+                  "orders": [
+                    {
+                      "direction": "DESC",
+                      "expression": "MEASURE(`Temp media`)"
+                    }
+                  ]
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região"
+                  },
+                  {
+                    "fieldName": "measure(Temp media)",
+                    "displayName": "Temp. média (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Anomalia)",
+                    "displayName": "Anomalia (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Chuva anual)",
+                    "displayName": "Chuva (mm/ano)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Chuva pct normal)",
+                    "displayName": "% da normal",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Umidade)",
+                    "displayName": "Umidade (%)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "countdistinct(cd_estacao)",
+                    "displayName": "Estações",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Indicadores por UF (período filtrado)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 12,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-comparacao",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    },
+                    {
+                      "name": "max(altitude_m)",
+                      "expression": "MAX(`altitude_m`)"
+                    },
+                    {
+                      "name": "measure(Temp media)",
+                      "expression": "MEASURE(`Temp media`)"
+                    },
+                    {
+                      "name": "measure(Chuva anual)",
+                      "expression": "MEASURE(`Chuva anual`)"
+                    },
+                    {
+                      "name": "measure(Umidade)",
+                      "expression": "MEASURE(`Umidade`)"
+                    },
+                    {
+                      "name": "measure(Dias chuva ano)",
+                      "expression": "MEASURE(`Dias chuva ano`)"
+                    },
+                    {
+                      "name": "measure(Anomalia)",
+                      "expression": "MEASURE(`Anomalia`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação"
+                  },
+                  {
+                    "fieldName": "max(altitude_m)",
+                    "displayName": "Altitude (m)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Temp media)",
+                    "displayName": "Temp. média (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Chuva anual)",
+                    "displayName": "Chuva (mm/ano)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Umidade)",
+                    "displayName": "Umidade (%)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Dias chuva ano)",
+                    "displayName": "Dias com chuva/ano",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measure(Anomalia)",
+                    "displayName": "Anomalia (°C)",
+                    "format": {
+                      "type": "number-plain",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Comparação entre estações (selecione no filtro Estação)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 25,
+            "width": 7,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p5-rede",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_estacoes",
+                  "fields": [
+                    {
+                      "name": "latitude",
+                      "expression": "`latitude`"
+                    },
+                    {
+                      "name": "longitude",
+                      "expression": "`longitude`"
+                    },
+                    {
+                      "name": "situacao",
+                      "expression": "`situacao`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "symbol-map",
+              "encodings": {
+                "coordinates": {
+                  "latitude": {
+                    "fieldName": "latitude"
+                  },
+                  "longitude": {
+                    "fieldName": "longitude"
+                  }
+                },
+                "color": {
+                  "fieldName": "situacao",
+                  "displayName": "Situação",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Operante",
+                        "color": "#2EBD85"
+                      },
+                      {
+                        "value": "Pane",
+                        "color": "#F5C518"
+                      }
+                    ]
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Rede de estações meteorológicas do INMET",
+                "showDescription": true,
+                "description": "Automáticas e convencionais; situação atual informada pelo INMET."
+              },
+              "mark": {
+                "opacity": 0.8
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 25,
+            "width": 5,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "filtros",
+      "displayName": "Filtros",
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "f-periodo",
+            "queries": [
+              {
+                "name": "f-periodo_ds_anual",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_mensal_hist",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_sazonal",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_eventos",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_spi",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_geo",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_enso_regiao",
+                "query": {
+                  "datasetName": "ds_enso_regiao",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-periodo_ds_enso",
+                "query": {
+                  "datasetName": "ds_enso",
+                  "fields": [
+                    {
+                      "name": "mes_ref",
+                      "expression": "`mes_ref`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_anual"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_mensal_hist"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_sazonal"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_eventos"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_spi"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_geo"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_enso_regiao"
+                  },
+                  {
+                    "fieldName": "mes_ref",
+                    "displayName": "Período",
+                    "queryName": "f-periodo_ds_enso"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Período"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f-regiao",
+            "queries": [
+              {
+                "name": "f-regiao_ds_kpi",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_anual",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_mensal_hist",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_sazonal",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_eventos",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_spi",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_spi_atual",
+                "query": {
+                  "datasetName": "ds_spi_atual",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_tendencia",
+                "query": {
+                  "datasetName": "ds_tendencia",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_geo",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-regiao_ds_enso_regiao",
+                "query": {
+                  "datasetName": "ds_enso_regiao",
+                  "fields": [
+                    {
+                      "name": "regiao",
+                      "expression": "`regiao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_kpi"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_anual"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_mensal_hist"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_sazonal"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_eventos"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_spi"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_spi_atual"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_tendencia"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_geo"
+                  },
+                  {
+                    "fieldName": "regiao",
+                    "displayName": "Região",
+                    "queryName": "f-regiao_ds_enso_regiao"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Região"
+              }
+            }
+          },
+          "position": {
+            "x": 4,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f-uf",
+            "queries": [
+              {
+                "name": "f-uf_ds_kpi",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_anual",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_mensal_hist",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_sazonal",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_eventos",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_spi",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_spi_atual",
+                "query": {
+                  "datasetName": "ds_spi_atual",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_tendencia",
+                "query": {
+                  "datasetName": "ds_tendencia",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-uf_ds_geo",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "sg_estado",
+                      "expression": "`sg_estado`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_kpi"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_anual"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_mensal_hist"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_sazonal"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_eventos"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_spi"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_spi_atual"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_tendencia"
+                  },
+                  {
+                    "fieldName": "sg_estado",
+                    "displayName": "UF",
+                    "queryName": "f-uf_ds_geo"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "UF"
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 0,
+            "width": 4,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f-estacao",
+            "queries": [
+              {
+                "name": "f-estacao_ds_kpi",
+                "query": {
+                  "datasetName": "ds_kpi",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_anual",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_mensal_hist",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_sazonal",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_eventos",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_spi",
+                "query": {
+                  "datasetName": "ds_spi",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_spi_atual",
+                "query": {
+                  "datasetName": "ds_spi_atual",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_tendencia",
+                "query": {
+                  "datasetName": "ds_tendencia",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-estacao_ds_geo",
+                "query": {
+                  "datasetName": "ds_geo",
+                  "fields": [
+                    {
+                      "name": "estacao",
+                      "expression": "`estacao`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_kpi"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_anual"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_mensal_hist"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_sazonal"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_eventos"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_spi"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_spi_atual"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_tendencia"
+                  },
+                  {
+                    "fieldName": "estacao",
+                    "displayName": "Estação",
+                    "queryName": "f-estacao_ds_geo"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Estação"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 8,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "f-serie-longa",
+            "queries": [
+              {
+                "name": "f-serie-longa_ds_anual",
+                "query": {
+                  "datasetName": "ds_anual",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-serie-longa_ds_mensal_hist",
+                "query": {
+                  "datasetName": "ds_mensal_hist",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-serie-longa_ds_sazonal",
+                "query": {
+                  "datasetName": "ds_sazonal",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "f-serie-longa_ds_eventos",
+                "query": {
+                  "datasetName": "ds_eventos",
+                  "fields": [
+                    {
+                      "name": "serie_longa",
+                      "expression": "`serie_longa`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-single-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_anual"
+                  },
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_mensal_hist"
+                  },
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_sazonal"
+                  },
+                  {
+                    "fieldName": "serie_longa",
+                    "displayName": "Série longa (15+ anos)",
+                    "queryName": "f-serie-longa_ds_eventos"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Série longa (15+ anos)"
+              },
+              "selection": {
+                "defaultSelection": {
+                  "values": {
+                    "dataType": "STRING",
+                    "values": [
+                      {
+                        "value": "Sim"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "position": {
+            "x": 8,
+            "y": 2,
+            "width": 4,
+            "height": 2
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#0B1220",
+        "dark": "#0B1220"
+      },
+      "widgetBackgroundColor": {
+        "light": "#111A2B",
+        "dark": "#111A2B"
+      },
+      "widgetBorderColor": {
+        "light": "#111A2B",
+        "dark": "#111A2B"
+      },
+      "fontColor": {
+        "light": "#E6EDF7",
+        "dark": "#E6EDF7"
+      },
+      "selectionColor": {
+        "light": "#F5C518",
+        "dark": "#F5C518"
+      },
+      "visualizationColors": [
+        "#3A8DDE",
+        "#E5484D",
+        "#22C3E6",
+        "#F5C518",
+        "#8B5CF6",
+        "#2EBD85",
+        "#9AA4B2",
+        "#B7791F"
+      ],
+      "widgetHeaderAlignment": "LEFT",
+      "widgetCornerRadius": 10
+    }
+  }
+}

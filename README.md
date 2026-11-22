@@ -69,6 +69,23 @@ Catálogo completo: [docs/catalogo_dados.md](docs/catalogo_dados.md) · Regras e
 | 04 · Extremos e seca | Ondas de calor por década e UF, frequência de dias acima do p95, mapa e série do SPI |
 | 05 · Geográfica | Tendência °C/década por estação, rankings, indicadores por UF, comparação entre estações |
 
+### Galeria
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/img/clima_brasil.jpeg" width="360" alt="Página Visão geral: resumo climático automático por região"><br><sub>01 · Visão geral — resumo automático por região</sub></td>
+    <td align="center"><img src="docs/img/historico.jpeg" width="360" alt="Página Histórico: evolução da temperatura anual 2000–2026"><br><sub>02 · Histórico — temperatura anual vs. normal</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/elnino.jpeg" width="360" alt="Página El Niño / La Niña: série do ONI por fase desde 2000"><br><sub>03 · El Niño / La Niña — ONI e fases desde 2000</sub></td>
+    <td align="center"><img src="docs/img/eventos_extremos.jpeg" width="360" alt="Página Eventos extremos: dias em onda de calor por estação-ano"><br><sub>04 · Extremos e seca — ondas de calor</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/img/analise_geografica.jpeg" width="360" alt="Página Geográfica: mapa da tendência de temperatura por estação"><br><sub>05 · Geográfica — tendência °C/década por estação</sub></td>
+    <td></td>
+  </tr>
+</table>
+
 O JSON do dashboard (`src/dashboards/clima_inmet.lvdash.json`) é **gerado** por
 [`scripts/gerar_dashboard.py`](scripts/gerar_dashboard.py), que valida os vínculos entre campos e widgets e a
 sobreposição do layout; o CI garante que o JSON versionado está sincronizado com o script.

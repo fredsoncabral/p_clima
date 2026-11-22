@@ -78,7 +78,7 @@ Catálogo completo: [docs/catalogo_dados.md](docs/catalogo_dados.md) · Regras e
   </tr>
   <tr>
     <td align="center"><img src="docs/img/elnino.jpeg" width="360" alt="Página El Niño / La Niña: série do ONI por fase desde 2000"><br><sub>03 · El Niño / La Niña — ONI e fases desde 2000</sub></td>
-    <td align="center"><img src="docs/img/eventos_extremos.jpeg" width="360" alt="Página Eventos extremos: dias em onda de calor por estação-ano"><br><sub>04 · Extremos e seca — ondas de calor</sub></td>
+    <td align="center"><img src="docs/img/extremas_seca.jpeg" width="360" alt="Página Extremos e seca: dias em onda de calor, ondas de calor e chuva extrema por estação-ano"><br><sub>04 · Extremos e seca — ondas de calor</sub></td>
   </tr>
   <tr>
     <td align="center"><img src="docs/img/analise_geografica.jpeg" width="360" alt="Página Geográfica: mapa da tendência de temperatura por estação"><br><sub>05 · Geográfica — tendência °C/década por estação</sub></td>
